@@ -11,7 +11,15 @@ export interface GraphClientOptions {
   tenantId?: string;
   clientId?: string;
   clientSecret?: string;
+  /** Pre-fetched bearer token; short-circuits all grants. */
   accessToken?: string;
+  /**
+   * Delegated OAuth refresh token. When set (and no static accessToken), the
+   * client mints short-lived DELEGATED access tokens via the refresh_token grant
+   * instead of client_credentials — so calls act on-behalf-of the user who
+   * consented, bounded by that user's own roles.
+   */
+  refreshToken?: string;
   baseUrl?: string;
   authorityHost?: string;
   scope?: string;
@@ -38,6 +46,7 @@ interface OAuthToken {
   token_type?: string;
   expires_in?: number;
   ext_expires_in?: number;
+  refresh_token?: string;
 }
 
 export class GraphClient {
@@ -46,17 +55,22 @@ export class GraphClient {
   private readonly clientId?: string;
   private readonly clientSecret?: string;
   private readonly staticAccessToken?: string;
+  private readonly refreshToken?: string;
   private readonly authorityHost: string;
   private readonly scope: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private cachedToken?: { accessToken: string; expiresAt: number };
+  /** Most recent (possibly rotated) delegated refresh token; callers persist this. */
+  latestRefreshToken?: string;
 
   constructor(options: GraphClientOptions = {}) {
     this.tenantId = options.tenantId ?? process.env.MS_TENANT_ID;
     this.clientId = options.clientId ?? process.env.MS_CLIENT_ID;
     this.clientSecret = options.clientSecret ?? process.env.MS_CLIENT_SECRET;
     this.staticAccessToken = options.accessToken ?? process.env.MS_ACCESS_TOKEN;
+    this.refreshToken = options.refreshToken ?? process.env.MS_REFRESH_TOKEN;
+    this.latestRefreshToken = this.refreshToken;
     this.baseUrl = trimTrailingSlash(options.baseUrl ?? process.env.MS_GRAPH_BASE_URL ?? GRAPH_DEFAULT_BASE_URL);
     assertSafeBaseUrl(this.baseUrl);
     this.authorityHost = trimTrailingSlash(
@@ -162,7 +176,75 @@ export class GraphClient {
       return this.staticAccessToken;
     }
 
+    if (this.refreshToken) {
+      return (await this.fetchDelegatedToken()).accessToken;
+    }
+
     return (await this.fetchClientCredentialsToken()).accessToken;
+  }
+
+  /**
+   * Mint a short-lived DELEGATED access token via the refresh_token grant
+   * (confidential client). Acts on-behalf-of the consenting user, bounded by
+   * their roles. Entra rotates the refresh token on redemption; the newest one
+   * is exposed via {@link latestRefreshToken} so the caller can persist it.
+   */
+  private async fetchDelegatedToken(): Promise<{ accessToken: string; expiresAt: number }> {
+    const now = Date.now();
+    if (this.cachedToken && this.cachedToken.expiresAt - now > 60_000) {
+      return this.cachedToken;
+    }
+
+    if (!this.tenantId || !this.clientId || !this.clientSecret || !this.latestRefreshToken) {
+      throw new Error(
+        'Missing delegated credentials. Set MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET and a refresh token.',
+      );
+    }
+
+    const url = `${this.authorityHost}/${encodeURIComponent(this.tenantId)}/oauth2/v2.0/token`;
+    const body = new URLSearchParams({
+      client_id: this.clientId,
+      client_secret: this.clientSecret,
+      grant_type: 'refresh_token',
+      refresh_token: this.latestRefreshToken,
+      scope: this.scope,
+    });
+
+    const response = await this.fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: body.toString(),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+
+    const responseBody = await readResponseBody(response);
+    if (!response.ok) {
+      throw new GraphHttpError({
+        status: response.status,
+        method: 'POST',
+        url,
+        payload: responseBody,
+        fallbackMessage: typeof responseBody === 'string' ? responseBody : undefined,
+      });
+    }
+
+    const token = responseBody as OAuthToken;
+    if (!token.access_token) {
+      throw new Error('Microsoft delegated token response did not include access_token.');
+    }
+    // Persist the rotated refresh token for the next mint / caller persistence.
+    if (token.refresh_token) {
+      this.latestRefreshToken = token.refresh_token;
+    }
+
+    this.cachedToken = {
+      accessToken: token.access_token,
+      expiresAt: now + Math.max(1, Number(token.expires_in ?? 3600)) * 1000,
+    };
+    return this.cachedToken;
   }
 
   private async fetchClientCredentialsToken(): Promise<{ accessToken: string; expiresAt: number }> {
