@@ -218,6 +218,215 @@ export async function removeGroupMember(
   }
 }
 
+/** Attributes that {@link updateUser} may PATCH onto an existing user. */
+export interface UpdateUserInput {
+  accountEnabled?: boolean;
+  displayName?: string;
+  givenName?: string;
+  surname?: string;
+  jobTitle?: string;
+  department?: string;
+  companyName?: string;
+  employeeType?: string;
+  mobilePhone?: string;
+  streetAddress?: string;
+  city?: string;
+  postalCode?: string;
+  state?: string;
+  country?: string;
+  officeLocation?: string;
+  usageLocation?: string;
+  otherMails?: string[];
+  businessPhones?: string[];
+}
+
+const UPDATE_USER_FIELDS: readonly (keyof UpdateUserInput)[] = [
+  'accountEnabled',
+  'displayName',
+  'givenName',
+  'surname',
+  'jobTitle',
+  'department',
+  'companyName',
+  'employeeType',
+  'mobilePhone',
+  'streetAddress',
+  'city',
+  'postalCode',
+  'state',
+  'country',
+  'officeLocation',
+  'usageLocation',
+  'otherMails',
+  'businessPhones',
+];
+
+/**
+ * PATCH a curated set of attributes onto an existing user. Enables/disables the
+ * account (`accountEnabled`) and updates profile fields; only keys present in
+ * the input are sent. Graph returns 204 No Content on success.
+ */
+export async function updateUser(
+  client: GraphClient,
+  userId: string,
+  patch: UpdateUserInput,
+): Promise<{ userId: string; updated: string[] }> {
+  const body: Record<string, unknown> = {};
+  for (const key of UPDATE_USER_FIELDS) {
+    if (patch[key] !== undefined) {
+      body[key] = patch[key];
+    }
+  }
+
+  const updated = Object.keys(body);
+  if (updated.length === 0) {
+    throw new Error('updateUser requires at least one field to change.');
+  }
+
+  await client.patch(`/users/${encodeURIComponent(userId)}`, body);
+  return { userId, updated };
+}
+
+/** Set a user's manager (`manager/$ref`). Pass an object id or userPrincipalName. */
+export async function setManager(
+  client: GraphClient,
+  userId: string,
+  managerId: string,
+): Promise<{ userId: string; managerId: string }> {
+  await client.request({
+    method: 'PUT',
+    path: `/users/${encodeURIComponent(userId)}/manager/$ref`,
+    body: { '@odata.id': client.directoryObjectUrl(managerId) },
+  });
+  return { userId, managerId };
+}
+
+/** Remove a user's manager assignment. Idempotent when no manager is set. */
+export async function removeManager(
+  client: GraphClient,
+  userId: string,
+): Promise<{ userId: string; removed: boolean }> {
+  try {
+    await client.delete(`/users/${encodeURIComponent(userId)}/manager/$ref`);
+    return { userId, removed: true };
+  } catch (error) {
+    if (error instanceof GraphHttpError && error.status === 404) {
+      return { userId, removed: false };
+    }
+    throw error;
+  }
+}
+
+export interface CreateTapInput {
+  /** Minutes the pass is valid. Bounded by the tenant TAP policy (Graph errors if it exceeds the cap). */
+  lifetimeInMinutes?: number;
+  /** Multi-use when false (default), single-use when true. */
+  isUsableOnce?: boolean;
+  /** ISO 8601 activation time; the pass is valid from this moment (future-dating supported). */
+  startDateTime?: string;
+  /** When true (default), regenerate until the passcode is purely alphanumeric. */
+  requireAlphanumeric?: boolean;
+  /** Max regeneration attempts when requiring alphanumeric (default 8). */
+  maxAttempts?: number;
+}
+
+interface GraphTapMethod {
+  id: string;
+  temporaryAccessPass: string;
+  isUsableOnce?: boolean;
+  lifetimeInMinutes?: number;
+  startDateTime?: string;
+  methodUsabilityReason?: string;
+}
+
+export interface CreateTapResult {
+  userId: string;
+  id: string;
+  temporaryAccessPass: string;
+  isUsableOnce: boolean;
+  lifetimeInMinutes?: number;
+  startDateTime?: string;
+  methodUsabilityReason?: string;
+  attempts: number;
+}
+
+const ALPHANUMERIC = /^[A-Za-z0-9]+$/;
+
+function tapMethodsPath(userId: string): string {
+  return `/users/${encodeURIComponent(userId)}/authentication/temporaryAccessPassMethods`;
+}
+
+/**
+ * Create a Temporary Access Pass for a user. Some tenants issue passcodes
+ * containing symbols (e.g. `^@#$`); when {@link CreateTapInput.requireAlphanumeric}
+ * is set (the default) any non-alphanumeric pass is deleted and regenerated up
+ * to `maxAttempts` times so the pass is easy to relay over SMS/print/email.
+ */
+export async function createTemporaryAccessPass(
+  client: GraphClient,
+  userId: string,
+  input: CreateTapInput = {},
+): Promise<CreateTapResult> {
+  const path = tapMethodsPath(userId);
+  const requireAlphanumeric = input.requireAlphanumeric !== false;
+  const maxAttempts = Math.max(1, input.maxAttempts ?? 8);
+
+  const body: Record<string, unknown> = { isUsableOnce: input.isUsableOnce ?? false };
+  if (input.lifetimeInMinutes !== undefined) body.lifetimeInMinutes = input.lifetimeInMinutes;
+  if (input.startDateTime) body.startDateTime = input.startDateTime;
+
+  let attempts = 0;
+  while (attempts < maxAttempts) {
+    attempts += 1;
+    const response = await client.post<GraphTapMethod>(path, body);
+    const tap = response.data;
+
+    if (!requireAlphanumeric || ALPHANUMERIC.test(tap.temporaryAccessPass)) {
+      return {
+        userId,
+        id: tap.id,
+        temporaryAccessPass: tap.temporaryAccessPass,
+        isUsableOnce: tap.isUsableOnce ?? (input.isUsableOnce ?? false),
+        lifetimeInMinutes: tap.lifetimeInMinutes,
+        startDateTime: tap.startDateTime,
+        methodUsabilityReason: tap.methodUsabilityReason,
+        attempts,
+      };
+    }
+
+    // Non-alphanumeric passcode: delete it and try again.
+    await client.delete(`${path}/${encodeURIComponent(tap.id)}`);
+  }
+
+  throw new Error(
+    `Could not generate an alphanumeric Temporary Access Pass after ${maxAttempts} attempts. Retry or set requireAlphanumeric=false.`,
+  );
+}
+
+/**
+ * Delete a user's Temporary Access Pass. With `methodId`, deletes that pass;
+ * otherwise deletes every TAP currently on the user.
+ */
+export async function deleteTemporaryAccessPass(
+  client: GraphClient,
+  userId: string,
+  methodId?: string,
+): Promise<{ userId: string; deleted: string[] }> {
+  const path = tapMethodsPath(userId);
+
+  if (methodId) {
+    await client.delete(`${path}/${encodeURIComponent(methodId)}`);
+    return { userId, deleted: [methodId] };
+  }
+
+  const existing = await client.get<{ value?: GraphTapMethod[] }>(path);
+  const ids = (existing.data?.value ?? []).map(method => method.id);
+  for (const id of ids) {
+    await client.delete(`${path}/${encodeURIComponent(id)}`);
+  }
+  return { userId, deleted: ids };
+}
+
 function isAlreadyMemberError(error: unknown): boolean {
   if (!(error instanceof GraphHttpError)) {
     return false;
