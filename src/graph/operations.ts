@@ -427,6 +427,67 @@ export async function deleteTemporaryAccessPass(
   return { userId, deleted: ids };
 }
 
+export interface PimSelfActivateInput {
+  /** Role definition/template GUID to activate (e.g. Authentication Administrator). */
+  roleDefinitionId: string;
+  /** ISO 8601 duration of the activation window (default PT1H). */
+  duration?: string;
+  justification?: string;
+  /** Directory scope; '/' (tenant) by default. */
+  directoryScopeId?: string;
+}
+
+export interface PimSelfActivateResult {
+  id: string;
+  status: string;
+  roleDefinitionId: string;
+  principalId: string;
+  duration: string;
+}
+
+/**
+ * Just-in-time PIM elevation: the *delegated* caller self-activates one of their
+ * own ELIGIBLE directory roles for a bounded window. Requires a delegated token
+ * (there is no signed-in user under app-only). Succeeds only if the caller is
+ * PIM-eligible for the role — otherwise Graph rejects it, which the caller treats
+ * as "not permitted" and degrades gracefully.
+ */
+export async function pimSelfActivateRole(
+  client: GraphClient,
+  input: PimSelfActivateInput,
+): Promise<PimSelfActivateResult> {
+  const me = await client.get<{ id?: string }>('/me', { $select: 'id' });
+  const principalId = me.data?.id;
+  if (!principalId) {
+    throw new Error('Could not resolve the signed-in user; PIM self-activation requires a delegated token.');
+  }
+
+  const duration = input.duration ?? 'PT1H';
+  const body = {
+    action: 'selfActivate',
+    principalId,
+    roleDefinitionId: input.roleDefinitionId,
+    directoryScopeId: input.directoryScopeId ?? '/',
+    justification: input.justification ?? 'borgels-mcp: just-in-time activation for an automated task',
+    scheduleInfo: {
+      startDateTime: new Date().toISOString(),
+      expiration: { type: 'afterDuration', duration },
+    },
+  };
+
+  const response = await client.post<{ id: string; status?: string }>(
+    '/roleManagement/directory/roleAssignmentScheduleRequests',
+    body,
+  );
+  return {
+    id: response.data.id,
+    status: response.data.status ?? 'Provisioned',
+    roleDefinitionId: input.roleDefinitionId,
+    principalId,
+    duration,
+  };
+}
+
 function isAlreadyMemberError(error: unknown): boolean {
   if (!(error instanceof GraphHttpError)) {
     return false;

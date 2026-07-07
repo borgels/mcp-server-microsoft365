@@ -9,6 +9,7 @@ import {
   createUser,
   deleteTemporaryAccessPass,
   listSubscribedSkus,
+  pimSelfActivateRole,
   removeGroupMember,
   removeLicense,
   setManager,
@@ -306,6 +307,23 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       annotations: DESTRUCTIVE_TOOL_ANNOTATIONS,
     },
     async input => runTool(async () => jsonToolResult(await deleteTemporaryAccessPass(client, input.user, input.methodId))),
+  );
+
+  server.registerTool(
+    'activate_pim_role',
+    {
+      title: 'Activate PIM Role (self)',
+      description:
+        'Just-in-time PIM elevation: the delegated caller self-activates one of their own ELIGIBLE directory roles (e.g. Authentication Administrator, needed for Temporary Access Pass) for a bounded window. Requires a delegated token; fails if the caller is not eligible.',
+      inputSchema: {
+        roleDefinitionId: z.string().trim().min(1),
+        duration: z.string().trim().min(1).optional(),
+        justification: z.string().trim().min(1).optional(),
+        directoryScopeId: z.string().trim().min(1).optional(),
+      },
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input => runTool(async () => jsonToolResult(await pimSelfActivateRole(client, input))),
   );
 }
 
