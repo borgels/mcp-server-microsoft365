@@ -2,11 +2,16 @@ import { GraphClient, type GraphClientOptions, type GraphQueryValue } from './gr
 import {
   addGroupMember,
   assignLicense,
+  createTemporaryAccessPass,
   createUser,
+  deleteTemporaryAccessPass,
   listSubscribedSkus,
   removeGroupMember,
   removeLicense,
+  setManager,
   setUsageLocation,
+  updateUser,
+  type UpdateUserInput,
 } from './graph/operations.js';
 
 export type GatewayRiskLevel = 'read' | 'write' | 'destructive';
@@ -207,6 +212,87 @@ export const microsoft365GatewayTools: GatewayToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'update_user',
+    title: 'Update Microsoft 365 user',
+    description:
+      'Update attributes on an existing user (PATCH). Use accountEnabled to enable/disable an existing account. Only provided fields change.',
+    riskLevel: 'write',
+    enabledByDefault: false,
+    inputSchema: {
+      type: 'object',
+      required: ['user'],
+      properties: {
+        user: userRef,
+        accountEnabled: { type: 'boolean' },
+        displayName: { type: 'string' },
+        givenName: { type: 'string' },
+        surname: { type: 'string' },
+        jobTitle: { type: 'string' },
+        department: { type: 'string' },
+        companyName: { type: 'string' },
+        employeeType: { type: 'string' },
+        mobilePhone: { type: 'string' },
+        streetAddress: { type: 'string' },
+        city: { type: 'string' },
+        postalCode: { type: 'string' },
+        state: { type: 'string' },
+        country: { type: 'string' },
+        officeLocation: { type: 'string' },
+        usageLocation: { type: 'string', description: 'ISO 3166-1 alpha-2 country code.' },
+        otherMails: { type: 'array', items: { type: 'string' } },
+        businessPhones: { type: 'array', items: { type: 'string' } },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'set_manager',
+    title: 'Set user manager',
+    description: "Set a user's manager by object id or userPrincipalName.",
+    riskLevel: 'write',
+    enabledByDefault: false,
+    inputSchema: {
+      type: 'object',
+      required: ['user', 'manager'],
+      properties: { user: userRef, manager: userRef },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'create_temporary_access_pass',
+    title: 'Create Temporary Access Pass',
+    description:
+      'Create a Temporary Access Pass (multi-use by default), regenerated until alphanumeric. lifetimeInMinutes is bounded by the tenant TAP policy. Returns the passcode; deliver out-of-band.',
+    riskLevel: 'write',
+    enabledByDefault: false,
+    inputSchema: {
+      type: 'object',
+      required: ['user'],
+      properties: {
+        user: userRef,
+        lifetimeInMinutes: { type: 'number', minimum: 10, maximum: 43200 },
+        isUsableOnce: { type: 'boolean' },
+        startDateTime: { type: 'string', description: 'ISO 8601 activation time (future-dating supported).' },
+        requireAlphanumeric: { type: 'boolean', description: 'Default true.' },
+        maxAttempts: { type: 'number', minimum: 1, maximum: 20 },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'delete_temporary_access_pass',
+    title: 'Delete Temporary Access Pass',
+    description: "Delete a user's Temporary Access Pass. With methodId deletes that pass; otherwise deletes all.",
+    riskLevel: 'destructive',
+    enabledByDefault: false,
+    inputSchema: {
+      type: 'object',
+      required: ['user'],
+      properties: { user: userRef, methodId: { type: 'string' } },
+      additionalProperties: false,
+    },
+  },
 ];
 
 export function createMicrosoft365Gateway(options: Microsoft365GatewayOptions = {}) {
@@ -302,6 +388,36 @@ export function createMicrosoft365Gateway(options: Microsoft365GatewayOptions = 
             await setUsageLocation(client, requiredString(input.user, 'user'), requiredString(input.usageLocation, 'usageLocation')),
           );
 
+        case 'update_user':
+          return jsonResult(
+            'Updated user.',
+            await updateUser(client, requiredString(input.user, 'user'), updateUserPatch(input)),
+          );
+
+        case 'set_manager':
+          return jsonResult(
+            'Set manager.',
+            await setManager(client, requiredString(input.user, 'user'), requiredString(input.manager, 'manager')),
+          );
+
+        case 'create_temporary_access_pass':
+          return jsonResult(
+            'Created Temporary Access Pass.',
+            await createTemporaryAccessPass(client, requiredString(input.user, 'user'), {
+              lifetimeInMinutes: numberValue(input.lifetimeInMinutes),
+              isUsableOnce: booleanValue(input.isUsableOnce),
+              startDateTime: stringValue(input.startDateTime),
+              requireAlphanumeric: booleanValue(input.requireAlphanumeric),
+              maxAttempts: numberValue(input.maxAttempts),
+            }),
+          );
+
+        case 'delete_temporary_access_pass':
+          return jsonResult(
+            'Deleted Temporary Access Pass.',
+            await deleteTemporaryAccessPass(client, requiredString(input.user, 'user'), stringValue(input.methodId)),
+          );
+
         default:
           return errorResult(`Unsupported Microsoft 365 gateway tool: ${toolName}`);
       }
@@ -347,6 +463,39 @@ function stringArray(value: GatewayJsonValue | undefined): string[] | undefined 
     return undefined;
   }
   return value.filter((item): item is string => typeof item === 'string');
+}
+
+const UPDATE_USER_STRING_FIELDS = [
+  'displayName',
+  'givenName',
+  'surname',
+  'jobTitle',
+  'department',
+  'companyName',
+  'employeeType',
+  'mobilePhone',
+  'streetAddress',
+  'city',
+  'postalCode',
+  'state',
+  'country',
+  'officeLocation',
+  'usageLocation',
+] as const;
+
+function updateUserPatch(input: GatewayJsonObject): UpdateUserInput {
+  const patch: UpdateUserInput = {};
+  for (const field of UPDATE_USER_STRING_FIELDS) {
+    const value = stringValue(input[field]);
+    if (value !== undefined) patch[field] = value;
+  }
+  const accountEnabled = booleanValue(input.accountEnabled);
+  if (accountEnabled !== undefined) patch.accountEnabled = accountEnabled;
+  const otherMails = stringArray(input.otherMails);
+  if (otherMails) patch.otherMails = otherMails;
+  const businessPhones = stringArray(input.businessPhones);
+  if (businessPhones) patch.businessPhones = businessPhones;
+  return patch;
 }
 
 function jsonResult(text: string, structuredContent: unknown): GatewayToolResult {

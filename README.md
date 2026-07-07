@@ -25,9 +25,12 @@ Read tools (enabled by default):
 Write tools (disabled by default):
 
 - `create_user`
+- `update_user` (PATCH attributes on an existing user, incl. `accountEnabled` to enable/disable — e.g. activate a pre-created hire or disable a leaver)
+- `set_manager`
 - `assign_license`, `remove_license`
 - `add_group_member`, `remove_group_member`
 - `set_usage_location`
+- `create_temporary_access_pass` (passwordless first sign-in / MFA setup; regenerated until alphanumeric), `delete_temporary_access_pass`
 
 The server runs application permissions only; it never signs a user in and never
 accepts credentials as tool arguments.
@@ -40,13 +43,22 @@ Grant the app registration only what it needs, then admin-consent:
 | --- | --- |
 | Read users and groups | `User.Read.All` |
 | Create users | `User.Create` (or `User.ReadWrite.All`) |
+| Update users / set manager / enable-disable | `User.ReadWrite.All` |
 | Read license/SKU state | `LicenseAssignment.Read.All` |
 | Assign / remove licenses | `LicenseAssignment.ReadWrite.All` |
 | Manage group membership | `GroupMember.ReadWrite.All` |
+| Create / delete Temporary Access Pass | `UserAuthenticationMethod.ReadWrite.All` |
 
 `User.Create` is narrower than `User.ReadWrite.All`; use it when you only need to
-provision new users. Reading SKUs (`/subscribedSkus`) is covered by
-`LicenseAssignment.Read.All`.
+provision new users. `update_user` and `set_manager` require `User.ReadWrite.All`.
+Reading SKUs (`/subscribedSkus`) is covered by `LicenseAssignment.Read.All`.
+
+**Temporary Access Pass** additionally requires the app to hold the **Authentication
+Administrator** (or Privileged Authentication Administrator) directory role —
+`UserAuthenticationMethod.ReadWrite.All` alone is not sufficient to manage another
+user's authentication methods. Assign the role to the app's service principal in
+**Entra ID → Roles and administrators**, and ensure the tenant's TAP policy is
+enabled (it also caps `lifetimeInMinutes`).
 
 ## App registration and admin consent
 

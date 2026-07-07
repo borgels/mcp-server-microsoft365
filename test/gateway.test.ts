@@ -41,10 +41,16 @@ describe('Microsoft 365 gateway export', () => {
         'add_group_member',
         'remove_group_member',
         'set_usage_location',
+        'update_user',
+        'set_manager',
+        'create_temporary_access_pass',
       ]),
     );
+    const destructive = microsoft365GatewayTools.filter(tool => tool.riskLevel === 'destructive');
+    expect(destructive.map(tool => tool.name)).toEqual(expect.arrayContaining(['delete_temporary_access_pass']));
     expect(reads.every(tool => tool.enabledByDefault)).toBe(true);
     expect(writes.every(tool => !tool.enabledByDefault)).toBe(true);
+    expect(destructive.every(tool => !tool.enabledByDefault)).toBe(true);
   });
 
   it('passes bearer credentials and $-prefixed query params to Graph reads', async () => {
@@ -148,6 +154,100 @@ describe('Microsoft 365 gateway export', () => {
 
     const result = await gateway.callTool('add_group_member', { groupId: 'g1', userId: 'u1' });
     expect(result.structuredContent).toMatchObject({ added: false, alreadyMember: true });
+  });
+
+  it('updates only the provided user fields via PATCH, including accountEnabled', async () => {
+    const { gateway, requests } = makeGateway(req => {
+      const url = new URL(req.url);
+      if (req.method === 'PATCH' && url.pathname === '/v1.0/users/u1') {
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`unexpected ${req.method} ${url.pathname}`);
+    });
+
+    const result = await gateway.callTool('update_user', {
+      user: 'u1',
+      accountEnabled: true,
+      jobTitle: 'Sales Executive',
+      department: 'Sales',
+      otherMails: ['private@example.com'],
+    });
+
+    expect(result.structuredContent).toMatchObject({ userId: 'u1' });
+    expect((result.structuredContent as { updated: string[] }).updated).toEqual(
+      expect.arrayContaining(['accountEnabled', 'jobTitle', 'department', 'otherMails']),
+    );
+    const body = JSON.parse((await requests[0]!.text()) || '{}');
+    expect(body).toEqual({
+      accountEnabled: true,
+      jobTitle: 'Sales Executive',
+      department: 'Sales',
+      otherMails: ['private@example.com'],
+    });
+  });
+
+  it('sets a manager via PUT manager/$ref with a directoryObjects reference', async () => {
+    const { gateway, requests } = makeGateway(req => {
+      const url = new URL(req.url);
+      if (req.method === 'PUT' && url.pathname === '/v1.0/users/u1/manager/$ref') {
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`unexpected ${req.method} ${url.pathname}`);
+    });
+
+    const result = await gateway.callTool('set_manager', { user: 'u1', manager: 'mgr-1' });
+    expect(result.structuredContent).toMatchObject({ userId: 'u1', managerId: 'mgr-1' });
+    const body = JSON.parse((await requests[0]!.text()) || '{}');
+    expect(body['@odata.id']).toContain('/directoryObjects/mgr-1');
+  });
+
+  it('regenerates a Temporary Access Pass until the passcode is alphanumeric', async () => {
+    let posts = 0;
+    const deletes: string[] = [];
+    const { gateway } = makeGateway(req => {
+      const url = new URL(req.url);
+      const path = url.pathname;
+      const base = '/v1.0/users/u1/authentication/temporaryAccessPassMethods';
+      if (req.method === 'POST' && path === base) {
+        posts += 1;
+        const pass = posts === 1 ? 'ab^d1234' : 'hn3WugkJ';
+        return Response.json(
+          { id: `tap-${posts}`, temporaryAccessPass: pass, isUsableOnce: false, lifetimeInMinutes: 60 },
+          { status: 201 },
+        );
+      }
+      if (req.method === 'DELETE' && path.startsWith(`${base}/`)) {
+        deletes.push(path);
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`unexpected ${req.method} ${path}`);
+    });
+
+    const result = await gateway.callTool('create_temporary_access_pass', { user: 'u1' });
+    expect(result.structuredContent).toMatchObject({ temporaryAccessPass: 'hn3WugkJ', id: 'tap-2', attempts: 2 });
+    // The rejected (non-alphanumeric) first pass is deleted before retrying.
+    expect(deletes).toEqual(['/v1.0/users/u1/authentication/temporaryAccessPassMethods/tap-1']);
+  });
+
+  it('deletes all Temporary Access Passes when no methodId is given', async () => {
+    const deletes: string[] = [];
+    const { gateway } = makeGateway(req => {
+      const url = new URL(req.url);
+      const path = url.pathname;
+      const base = '/v1.0/users/u1/authentication/temporaryAccessPassMethods';
+      if (req.method === 'GET' && path === base) {
+        return Response.json({ value: [{ id: 't1', temporaryAccessPass: 'x' }, { id: 't2', temporaryAccessPass: 'y' }] });
+      }
+      if (req.method === 'DELETE' && path.startsWith(`${base}/`)) {
+        deletes.push(path);
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`unexpected ${req.method} ${path}`);
+    });
+
+    const result = await gateway.callTool('delete_temporary_access_pass', { user: 'u1' });
+    expect(result.structuredContent).toMatchObject({ deleted: ['t1', 't2'] });
+    expect(deletes.length).toBe(2);
   });
 
   it('returns an error result for unsupported tools', async () => {
