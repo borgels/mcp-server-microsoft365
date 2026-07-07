@@ -5,11 +5,15 @@ import { type GraphClient, type GraphQueryValue } from '../graph/client.js';
 import {
   addGroupMember,
   assignLicense,
+  createTemporaryAccessPass,
   createUser,
+  deleteTemporaryAccessPass,
   listSubscribedSkus,
   removeGroupMember,
   removeLicense,
+  setManager,
   setUsageLocation,
+  updateUser,
 } from '../graph/operations.js';
 
 export const READ_TOOL_ANNOTATIONS = {
@@ -223,6 +227,85 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
     async input => runTool(async () => jsonToolResult(await setUsageLocation(client, input.user, input.usageLocation))),
+  );
+
+  server.registerTool(
+    'update_user',
+    {
+      title: 'Update Microsoft 365 User',
+      description:
+        'Update attributes on an existing user (PATCH). Use accountEnabled to enable/disable an existing account (e.g. activate a pre-created hire or disable a leaver). Only provided fields are changed.',
+      inputSchema: {
+        user: userRef,
+        accountEnabled: z.boolean().optional(),
+        displayName: z.string().trim().min(1).optional(),
+        givenName: z.string().trim().min(1).optional(),
+        surname: z.string().trim().min(1).optional(),
+        jobTitle: z.string().trim().min(1).optional(),
+        department: z.string().trim().min(1).optional(),
+        companyName: z.string().trim().min(1).optional(),
+        employeeType: z.string().trim().min(1).optional(),
+        mobilePhone: z.string().trim().min(1).optional(),
+        streetAddress: z.string().trim().min(1).optional(),
+        city: z.string().trim().min(1).optional(),
+        postalCode: z.string().trim().min(1).optional(),
+        state: z.string().trim().min(1).optional(),
+        country: z.string().trim().min(1).optional(),
+        officeLocation: z.string().trim().min(1).optional(),
+        usageLocation: usageLocation.optional(),
+        otherMails: z.array(z.string().trim().min(1)).max(10).optional(),
+        businessPhones: z.array(z.string().trim().min(1)).max(10).optional(),
+      },
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input => {
+      const { user, ...patch } = input;
+      return runTool(async () => jsonToolResult(await updateUser(client, user, patch)));
+    },
+  );
+
+  server.registerTool(
+    'set_manager',
+    {
+      title: 'Set User Manager',
+      description: "Set a user's manager. Provide the manager's object id or userPrincipalName.",
+      inputSchema: { user: userRef, manager: userRef },
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input => runTool(async () => jsonToolResult(await setManager(client, input.user, input.manager))),
+  );
+
+  server.registerTool(
+    'create_temporary_access_pass',
+    {
+      title: 'Create Temporary Access Pass',
+      description:
+        'Create a Temporary Access Pass (TAP) for passwordless first sign-in / MFA setup. Multi-use by default; regenerated until the passcode is alphanumeric so it is easy to relay. lifetimeInMinutes is bounded by the tenant TAP policy. Returns the passcode; deliver it out-of-band.',
+      inputSchema: {
+        user: userRef,
+        lifetimeInMinutes: z.number().int().min(10).max(43200).optional(),
+        isUsableOnce: z.boolean().optional(),
+        startDateTime: z.string().trim().min(1).optional(),
+        requireAlphanumeric: z.boolean().optional(),
+        maxAttempts: z.number().int().min(1).max(20).optional(),
+      },
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input => {
+      const { user, ...tap } = input;
+      return runTool(async () => jsonToolResult(await createTemporaryAccessPass(client, user, tap)));
+    },
+  );
+
+  server.registerTool(
+    'delete_temporary_access_pass',
+    {
+      title: 'Delete Temporary Access Pass',
+      description: "Delete a user's Temporary Access Pass. With methodId deletes that pass; otherwise deletes every TAP on the user.",
+      inputSchema: { user: userRef, methodId: z.string().trim().min(1).optional() },
+      annotations: DESTRUCTIVE_TOOL_ANNOTATIONS,
+    },
+    async input => runTool(async () => jsonToolResult(await deleteTemporaryAccessPass(client, input.user, input.methodId))),
   );
 }
 
