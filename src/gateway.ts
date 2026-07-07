@@ -6,6 +6,7 @@ import {
   createUser,
   deleteTemporaryAccessPass,
   listSubscribedSkus,
+  pimSelfActivateRole,
   removeGroupMember,
   removeLicense,
   setManager,
@@ -293,6 +294,25 @@ export const microsoft365GatewayTools: GatewayToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'activate_pim_role',
+    title: 'Activate PIM role (self)',
+    description:
+      'Just-in-time PIM elevation: the delegated caller self-activates one of their own eligible directory roles for a bounded window (e.g. Authentication Administrator for TAP). Requires a delegated token; fails if not eligible.',
+    riskLevel: 'write',
+    enabledByDefault: false,
+    inputSchema: {
+      type: 'object',
+      required: ['roleDefinitionId'],
+      properties: {
+        roleDefinitionId: { type: 'string', description: 'Role definition/template GUID to activate.' },
+        duration: { type: 'string', description: 'ISO 8601 duration of the activation window (default PT1H).' },
+        justification: { type: 'string' },
+        directoryScopeId: { type: 'string', description: "Directory scope; '/' (tenant) by default." },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 export function createMicrosoft365Gateway(options: Microsoft365GatewayOptions = {}) {
@@ -416,6 +436,17 @@ export function createMicrosoft365Gateway(options: Microsoft365GatewayOptions = 
           return jsonResult(
             'Deleted Temporary Access Pass.',
             await deleteTemporaryAccessPass(client, requiredString(input.user, 'user'), stringValue(input.methodId)),
+          );
+
+        case 'activate_pim_role':
+          return jsonResult(
+            'Activated PIM role.',
+            await pimSelfActivateRole(client, {
+              roleDefinitionId: requiredString(input.roleDefinitionId, 'roleDefinitionId'),
+              duration: stringValue(input.duration),
+              justification: stringValue(input.justification),
+              directoryScopeId: stringValue(input.directoryScopeId),
+            }),
           );
 
         default:

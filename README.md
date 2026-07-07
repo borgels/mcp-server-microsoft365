@@ -31,9 +31,16 @@ Write tools (disabled by default):
 - `add_group_member`, `remove_group_member`
 - `set_usage_location`
 - `create_temporary_access_pass` (passwordless first sign-in / MFA setup; regenerated until alphanumeric), `delete_temporary_access_pass`
+- `activate_pim_role` (just-in-time PIM self-activation of an *eligible* directory role, e.g. Authentication Administrator for TAP — delegated mode only)
 
-The server runs application permissions only; it never signs a user in and never
-accepts credentials as tool arguments.
+## Authentication modes
+
+The server authenticates to Graph in one of three ways, chosen by which options
+are set (never as tool arguments):
+
+- **App-only (client credentials)** — `MS_TENANT_ID` + `MS_CLIENT_ID` + `MS_CLIENT_SECRET`. Acts as the app; requires the application permissions below.
+- **Delegated (on-behalf-of a user)** — a `refreshToken` option / `MS_REFRESH_TOKEN` (plus the app's `MS_CLIENT_ID`/`MS_CLIENT_SECRET`/`MS_TENANT_ID`). The server mints short-lived **delegated** access tokens via the `refresh_token` grant, so calls act as the consenting user and are **bounded by that user's own roles**. Entra rotates the refresh token on use; the latest is exposed on the client (`latestRefreshToken`) so the host can persist it. `activate_pim_role` only works in this mode.
+- **Static token** — a pre-fetched `MS_ACCESS_TOKEN` / `accessToken` (short-circuits the grants).
 
 ## Least-privilege application permissions
 
@@ -48,6 +55,7 @@ Grant the app registration only what it needs, then admin-consent:
 | Assign / remove licenses | `LicenseAssignment.ReadWrite.All` |
 | Manage group membership | `GroupMember.ReadWrite.All` |
 | Create / delete Temporary Access Pass | `UserAuthenticationMethod.ReadWrite.All` |
+| JIT PIM role activation (`activate_pim_role`, delegated) | delegated `RoleManagement.ReadWrite.Directory` (bounded by the user's eligible roles) |
 
 `User.Create` is narrower than `User.ReadWrite.All`; use it when you only need to
 provision new users. `update_user` and `set_manager` require `User.ReadWrite.All`.

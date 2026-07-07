@@ -44,6 +44,7 @@ describe('Microsoft 365 gateway export', () => {
         'update_user',
         'set_manager',
         'create_temporary_access_pass',
+        'activate_pim_role',
       ]),
     );
     const destructive = microsoft365GatewayTools.filter(tool => tool.riskLevel === 'destructive');
@@ -248,6 +249,58 @@ describe('Microsoft 365 gateway export', () => {
     const result = await gateway.callTool('delete_temporary_access_pass', { user: 'u1' });
     expect(result.structuredContent).toMatchObject({ deleted: ['t1', 't2'] });
     expect(deletes.length).toBe(2);
+  });
+
+  it('self-activates a PIM role: GET /me then POST a roleAssignmentScheduleRequest', async () => {
+    const { gateway, requests } = makeGateway(req => {
+      const url = new URL(req.url);
+      if (req.method === 'GET' && url.pathname === '/v1.0/me') {
+        return Response.json({ id: 'user-1' });
+      }
+      if (req.method === 'POST' && url.pathname === '/v1.0/roleManagement/directory/roleAssignmentScheduleRequests') {
+        return Response.json({ id: 'req-1', status: 'Provisioned' }, { status: 201 });
+      }
+      throw new Error(`unexpected ${req.method} ${url.pathname}`);
+    });
+
+    const result = await gateway.callTool('activate_pim_role', { roleDefinitionId: 'role-guid' });
+    expect(result.structuredContent).toMatchObject({ id: 'req-1', principalId: 'user-1', roleDefinitionId: 'role-guid' });
+    const post = requests.find(r => r.method === 'POST')!;
+    const body = JSON.parse((await post.text()) || '{}');
+    expect(body.action).toBe('selfActivate');
+    expect(body.principalId).toBe('user-1');
+    expect(body.roleDefinitionId).toBe('role-guid');
+    expect(body.scheduleInfo.expiration.duration).toBe('PT1H');
+  });
+
+  it('mints a DELEGATED token via the refresh_token grant and calls Graph with it', async () => {
+    const requests: Request[] = [];
+    const gateway = createMicrosoft365Gateway({
+      tenantId: 'tenant-1',
+      clientId: 'client-1',
+      clientSecret: 'secret-1',
+      refreshToken: 'rt-1',
+      baseUrl: BASE,
+      authorityHost: 'https://login.example.test',
+      fetchImpl: async (input, init) => {
+        const req = new Request(input, init);
+        requests.push(req);
+        const url = new URL(req.url);
+        if (req.method === 'POST' && url.href.startsWith('https://login.example.test/')) {
+          const body = await req.text();
+          expect(body).toContain('grant_type=refresh_token');
+          expect(body).toContain('refresh_token=rt-1');
+          return Response.json({ access_token: 'delegated-abc', expires_in: 3600, refresh_token: 'rt-2' });
+        }
+        return Response.json({ value: [] });
+      },
+    });
+
+    await gateway.callTool('list_users', {});
+    const tokenReq = requests.find(r => new URL(r.url).host === 'login.example.test');
+    expect(tokenReq, 'refresh_token grant should be called').toBeTruthy();
+    const graphReq = requests.find(r => new URL(r.url).host === new URL(BASE).host);
+    expect(graphReq?.headers.get('Authorization')).toBe('Bearer delegated-abc');
   });
 
   it('returns an error result for unsupported tools', async () => {
