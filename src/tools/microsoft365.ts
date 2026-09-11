@@ -53,8 +53,28 @@ const listShape = {
   orderby: z.string().trim().min(1).optional(),
 };
 
-export function registerMicrosoft365Tools(server: McpServer, client: GraphClient): void {
-  server.registerTool(
+export interface RegisterToolsOptions {
+  /** Register write/destructive tools. Off by default: the container then exposes read tools only. */
+  enableWrites?: boolean;
+}
+
+type RegisterTool = McpServer['registerTool'];
+
+/**
+ * Returns a registerTool that silently skips tools whose annotations are not
+ * read-only when writes are disabled. Gating on the annotation (not on a name
+ * list) means a new write tool is off by default until someone flips the flag.
+ */
+function gatedRegistrar(server: McpServer, enableWrites: boolean): RegisterTool {
+  return ((name: string, config: { annotations?: { readOnlyHint?: boolean } }, cb: unknown) => {
+    if (!enableWrites && config.annotations?.readOnlyHint !== true) return undefined;
+    return (server.registerTool as unknown as (...args: unknown[]) => unknown)(name, config, cb);
+  }) as unknown as RegisterTool;
+}
+
+export function registerMicrosoft365Tools(server: McpServer, client: GraphClient, options: RegisterToolsOptions = {}): void {
+  const register = gatedRegistrar(server, options.enableWrites ?? false);
+  register(
     'get_user',
     {
       title: 'Get Microsoft 365 User',
@@ -66,7 +86,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       runTool(async () => jsonToolResult(await client.get(`/users/${encodeURIComponent(input.user)}`, readQuery(input)))),
   );
 
-  server.registerTool(
+  register(
     'list_users',
     {
       title: 'List Microsoft 365 Users',
@@ -77,7 +97,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     async input => runTool(async () => jsonToolResult(await client.get('/users', readQuery(input)))),
   );
 
-  server.registerTool(
+  register(
     'list_subscribed_skus',
     {
       title: 'List Subscribed SKUs',
@@ -88,7 +108,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     async () => runTool(async () => jsonToolResult(await listSubscribedSkus(client))),
   );
 
-  server.registerTool(
+  register(
     'list_groups',
     {
       title: 'List Microsoft 365 Groups',
@@ -99,7 +119,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     async input => runTool(async () => jsonToolResult(await client.get('/groups', readQuery(input)))),
   );
 
-  server.registerTool(
+  register(
     'get_group',
     {
       title: 'Get Microsoft 365 Group',
@@ -111,7 +131,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       runTool(async () => jsonToolResult(await client.get(`/groups/${encodeURIComponent(input.groupId)}`, readQuery(input)))),
   );
 
-  server.registerTool(
+  register(
     'list_group_members',
     {
       title: 'List Group Members',
@@ -125,7 +145,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       ),
   );
 
-  server.registerTool(
+  register(
     'get_user_license_details',
     {
       title: 'Get User License Details',
@@ -137,7 +157,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       runTool(async () => jsonToolResult(await client.get(`/users/${encodeURIComponent(input.user)}/licenseDetails`))),
   );
 
-  server.registerTool(
+  register(
     'create_user',
     {
       title: 'Create Microsoft 365 User',
@@ -158,7 +178,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     async input => runTool(async () => jsonToolResult(await createUser(client, input))),
   );
 
-  server.registerTool(
+  register(
     'assign_license',
     {
       title: 'Assign License To User',
@@ -185,7 +205,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       ),
   );
 
-  server.registerTool(
+  register(
     'remove_license',
     {
       title: 'Remove License From User',
@@ -197,7 +217,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       runTool(async () => jsonToolResult(await removeLicense(client, { userId: input.user, license: input.license }))),
   );
 
-  server.registerTool(
+  register(
     'add_group_member',
     {
       title: 'Add Group Member',
@@ -208,7 +228,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     async input => runTool(async () => jsonToolResult(await addGroupMember(client, input.groupId, input.userId))),
   );
 
-  server.registerTool(
+  register(
     'remove_group_member',
     {
       title: 'Remove Group Member',
@@ -219,7 +239,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     async input => runTool(async () => jsonToolResult(await removeGroupMember(client, input.groupId, input.userId))),
   );
 
-  server.registerTool(
+  register(
     'set_usage_location',
     {
       title: 'Set User Usage Location',
@@ -230,7 +250,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     async input => runTool(async () => jsonToolResult(await setUsageLocation(client, input.user, input.usageLocation))),
   );
 
-  server.registerTool(
+  register(
     'update_user',
     {
       title: 'Update Microsoft 365 User',
@@ -265,7 +285,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     },
   );
 
-  server.registerTool(
+  register(
     'set_manager',
     {
       title: 'Set User Manager',
@@ -276,7 +296,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     async input => runTool(async () => jsonToolResult(await setManager(client, input.user, input.manager))),
   );
 
-  server.registerTool(
+  register(
     'create_temporary_access_pass',
     {
       title: 'Create Temporary Access Pass',
@@ -298,7 +318,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     },
   );
 
-  server.registerTool(
+  register(
     'delete_temporary_access_pass',
     {
       title: 'Delete Temporary Access Pass',
@@ -309,7 +329,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     async input => runTool(async () => jsonToolResult(await deleteTemporaryAccessPass(client, input.user, input.methodId))),
   );
 
-  server.registerTool(
+  register(
     'activate_pim_role',
     {
       title: 'Activate PIM Role (self)',
