@@ -55,6 +55,8 @@ Grant the app registration only what it needs, then admin-consent:
 | Assign / remove licenses | `LicenseAssignment.ReadWrite.All` |
 | Manage group membership | `GroupMember.ReadWrite.All` |
 | Create / delete Temporary Access Pass | `UserAuthenticationMethod.ReadWrite.All` |
+| Read Intune devices (`list_user_devices`, `list_managed_devices`) | `DeviceManagementManagedDevices.Read.All` |
+| Read Intune configuration / compliance policies | `DeviceManagementConfiguration.Read.All` |
 | JIT PIM role activation (`activate_pim_role`, delegated) | delegated `RoleManagement.ReadWrite.Directory` (bounded by the user's eligible roles) |
 
 `User.Create` is narrower than `User.ReadWrite.All`; use it when you only need to
@@ -145,6 +147,14 @@ During development:
   }
 }
 ```
+
+## Intune (read)
+
+`list_user_devices`, `list_managed_devices`, `list_device_configurations` and
+`list_compliance_policies` read Intune through Graph (`/users/{id}/managedDevices`,
+`/deviceManagement/...`). They need the application permissions
+`DeviceManagementManagedDevices.Read.All` and `DeviceManagementConfiguration.Read.All`.
+Pass `includeAssignments: true` to expand group assignments on policies.
 
 ## Write gating
 
