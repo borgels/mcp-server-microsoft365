@@ -146,6 +146,14 @@ During development:
 }
 ```
 
+## Write gating
+
+All write and destructive tools (`create_user`, `assign_license`, `add_group_member`,
+`create_temporary_access_pass`, ...) are **only registered when `MS_ENABLE_WRITES=true`**.
+The default is read-only, so a container started without the flag exposes the seven
+read tools and nothing else; callers see write tools as unknown rather than forbidden.
+Gating is by tool annotation (`readOnlyHint`), so a new write tool is off by default.
+
 ## Streamable HTTP transport
 
 ```sh

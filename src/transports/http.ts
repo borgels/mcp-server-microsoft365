@@ -1,6 +1,6 @@
 import { createServer as createNodeServer } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createServer as createMcpServer } from '../server.js';
+import { createServer as createMcpServer, writesEnabledFromEnv } from '../server.js';
 import {
   assertAllowedOrigin,
   assertAuthorized,
@@ -68,5 +68,5 @@ const httpServer = createNodeServer(async (req, res) => {
 });
 
 httpServer.listen(config.port, config.host, () => {
-  console.error(`Microsoft 365 MCP HTTP server listening on http://${config.host}:${config.port}/mcp`);
+  console.error(`Microsoft 365 MCP HTTP server listening on http://${config.host}:${config.port}/mcp (writes ${writesEnabledFromEnv() ? 'ENABLED' : 'disabled'})`);
 });

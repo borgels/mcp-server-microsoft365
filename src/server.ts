@@ -8,6 +8,12 @@ import { registerMicrosoft365Tools } from './tools/microsoft365.js';
 export interface CreateServerOptions {
   client?: GraphClient;
   clientOptions?: GraphClientOptions;
+  /** Expose write/destructive tools. Defaults to MS_ENABLE_WRITES=true in the environment, else false. */
+  enableWrites?: boolean;
+}
+
+export function writesEnabledFromEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.MS_ENABLE_WRITES === 'true';
 }
 
 const PACKAGE_VERSION = readPackageVersion();
@@ -19,7 +25,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
   });
 
   const client = options.client ?? new GraphClient(options.clientOptions);
-  registerMicrosoft365Tools(server, client);
+  registerMicrosoft365Tools(server, client, { enableWrites: options.enableWrites ?? writesEnabledFromEnv() });
 
   return server;
 }
