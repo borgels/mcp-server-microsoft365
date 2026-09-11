@@ -157,6 +157,78 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       runTool(async () => jsonToolResult(await client.get(`/users/${encodeURIComponent(input.user)}/licenseDetails`))),
   );
 
+  // --- Intune (read) ---------------------------------------------------------
+  // Needs DeviceManagementManagedDevices.Read.All / DeviceManagementConfiguration.Read.All.
+
+  register(
+    'list_user_devices',
+    {
+      title: 'List a User\'s Intune Devices',
+      description:
+        'Managed devices enrolled for a user (Intune): operating system and version, model, compliance state, last check-in, ownership. Use it before asking a requester which device they use.',
+      inputSchema: { user: userRef, select: selectShape },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runTool(async () =>
+        jsonToolResult(
+          await client.get(`/users/${encodeURIComponent(input.user)}/managedDevices`, {
+            $select: (input.select ?? ['id', 'deviceName', 'operatingSystem', 'osVersion', 'model', 'manufacturer', 'complianceState', 'managedDeviceOwnerType', 'lastSyncDateTime', 'enrolledDateTime', 'azureADDeviceId']).join(','),
+          }),
+        ),
+      ),
+  );
+
+  register(
+    'list_managed_devices',
+    {
+      title: 'List Intune Managed Devices',
+      description: 'All managed devices in the tenant with optional $filter (e.g. "operatingSystem eq \'macOS\'"), $select, $top.',
+      inputSchema: { ...listShape },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input => runTool(async () => jsonToolResult(await client.get('/deviceManagement/managedDevices', readQuery(input)))),
+  );
+
+  register(
+    'list_device_configurations',
+    {
+      title: 'List Intune Configuration Profiles',
+      description:
+        'Device configuration profiles (Intune → Devices → Configuration), with their group assignments when includeAssignments is true. Use it to check whether a policy actually restricts what a requester describes.',
+      inputSchema: { ...listShape, includeAssignments: z.boolean().optional() },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runTool(async () =>
+        jsonToolResult(
+          await client.get('/deviceManagement/deviceConfigurations', {
+            ...readQuery(input),
+            ...(input.includeAssignments ? { $expand: 'assignments' } : {}),
+          }),
+        ),
+      ),
+  );
+
+  register(
+    'list_compliance_policies',
+    {
+      title: 'List Intune Compliance Policies',
+      description: 'Device compliance policies with their group assignments when includeAssignments is true.',
+      inputSchema: { ...listShape, includeAssignments: z.boolean().optional() },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runTool(async () =>
+        jsonToolResult(
+          await client.get('/deviceManagement/deviceCompliancePolicies', {
+            ...readQuery(input),
+            ...(input.includeAssignments ? { $expand: 'assignments' } : {}),
+          }),
+        ),
+      ),
+  );
+
   register(
     'create_user',
     {

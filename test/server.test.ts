@@ -19,9 +19,13 @@ const READ_TOOLS = [
   'get_group',
   'get_user',
   'get_user_license_details',
+  'list_compliance_policies',
+  'list_device_configurations',
   'list_group_members',
   'list_groups',
+  'list_managed_devices',
   'list_subscribed_skus',
+  'list_user_devices',
   'list_users',
 ];
 
