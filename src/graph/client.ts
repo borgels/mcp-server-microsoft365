@@ -109,7 +109,37 @@ export class GraphClient {
     return this.request<T>({ method: 'DELETE', path, query, body });
   }
 
+  /**
+   * A write against an object that was just created can still get
+   * `404 Request_ResourceNotFound`: Entra replicates asynchronously, and a read
+   * succeeding on one replica says nothing about the one the next call lands on.
+   * Seen on #78023 — create_user returned, a GET confirmed the account, and the
+   * PATCH a second later still could not see it.
+   *
+   * So a WRITE that reports the resource missing is retried briefly. Reads and
+   * deletes are left alone: a 404 there is an answer callers depend on
+   * (removeManager reads it as "no manager set"), and retrying it would make
+   * every such path slow for nothing.
+   */
+  private shouldRetryMissing(request: GraphRequest, error: unknown): boolean {
+    if (!(error instanceof GraphHttpError) || error.status !== 404) return false;
+    if (request.method !== 'PATCH' && request.method !== 'PUT' && request.method !== 'POST') return false;
+    return /Request_ResourceNotFound/i.test(error.message);
+  }
+
   async request<T = unknown>(request: GraphRequest): Promise<GraphResponse<T>> {
+    const attempts = 6;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.requestOnce<T>(request);
+      } catch (error) {
+        if (attempt >= attempts || !this.shouldRetryMissing(request, error)) throw error;
+        await new Promise(resolve => setTimeout(resolve, 2_000));
+      }
+    }
+  }
+
+  private async requestOnce<T = unknown>(request: GraphRequest): Promise<GraphResponse<T>> {
     const url = this.url(request.path, request.query);
     const headers: Record<string, string> = {
       Accept: 'application/json',
