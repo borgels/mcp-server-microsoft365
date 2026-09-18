@@ -12,6 +12,7 @@ import {
   pimSelfActivateRole,
   removeGroupMember,
   removeLicense,
+  resetPassword,
   setManager,
   setUsageLocation,
   updateUser,
@@ -355,6 +356,18 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       const { user, ...patch } = input;
       return runTool(async () => jsonToolResult(await updateUser(client, user, patch)));
     },
+  );
+
+  register(
+    'reset_password',
+    {
+      title: 'Reset User Password',
+      description:
+        'Give an existing user a new temporary password, which they must change at next sign-in. Returns it once. Use when someone has to get into an account for the first time and the password from creation is gone, stale, or was seen by more people than it should have been.',
+      inputSchema: { user: userRef },
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input => runTool(async () => jsonToolResult(await resetPassword(client, input.user))),
   );
 
   register(
