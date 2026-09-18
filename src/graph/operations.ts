@@ -315,6 +315,26 @@ export async function updateUser(
   return { userId, updated };
 }
 
+/**
+ * Give an existing user a fresh temporary password, to be changed at next sign-in.
+ *
+ * The one case that needs it: someone must get into an account they have never
+ * used, and the password from creation is gone, stale or was seen by more people
+ * than it should have been. The new one is returned once and never stored here.
+ */
+export async function resetPassword(
+  client: GraphClient,
+  userId: string,
+): Promise<{ userId: string; temporaryPassword: string; forceChangePasswordNextSignIn: true }> {
+  const temporaryPassword = generateTempPassword();
+  await client.request({
+    method: 'PATCH',
+    path: `/users/${encodeURIComponent(userId)}`,
+    body: { passwordProfile: { password: temporaryPassword, forceChangePasswordNextSignIn: true } },
+  });
+  return { userId, temporaryPassword, forceChangePasswordNextSignIn: true };
+}
+
 /** Set a user's manager (`manager/$ref`). Pass an object id or userPrincipalName. */
 export async function setManager(
   client: GraphClient,
