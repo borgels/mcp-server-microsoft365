@@ -352,3 +352,30 @@ describe('password reset', () => {
     expect(password.length).toBeGreaterThan(12);
   });
 });
+
+describe('replication lag on writes', () => {
+  it('retries a PATCH that cannot see a just-created user, but not a GET (#78023)', async () => {
+    let patches = 0;
+    let gets = 0;
+    const missing = () =>
+      Response.json(
+        { error: { code: 'Request_ResourceNotFound', message: "Resource 'ksk@one-group.dk' does not exist" } },
+        { status: 404 },
+      );
+    const { gateway } = makeGateway(req => {
+      if (req.method === 'PATCH') {
+        patches += 1;
+        return patches < 3 ? missing() : new Response(null, { status: 204 });
+      }
+      gets += 1;
+      return missing();
+    });
+
+    await gateway.callTool('update_user', { user: 'ksk@one-group.dk', jobTitle: 'Partner' });
+    expect(patches).toBe(3);
+
+    // A read that says "not found" is an answer, not a symptom.
+    await expect(gateway.callTool('get_user', { user: 'nobody@one-group.dk' })).rejects.toThrow();
+    expect(gets).toBe(1);
+  }, 20_000);
+});
