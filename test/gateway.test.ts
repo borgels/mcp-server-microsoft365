@@ -66,12 +66,18 @@ describe('Microsoft 365 gateway export', () => {
   });
 
   it('creates a user with a generated temporary password after an existence check', async () => {
+    // The existence check before the POST must 404; the replication wait after
+    // it must eventually succeed, exactly as Entra behaves (#78020).
+    let created = false;
     const { gateway, requests } = makeGateway(req => {
       const url = new URL(req.url);
       if (req.method === 'GET' && url.pathname.startsWith('/v1.0/users/')) {
-        return Response.json({ error: { code: 'Request_ResourceNotFound', message: 'not found' } }, { status: 404 });
+        return created
+          ? Response.json({ id: 'new-id' }, { status: 200 })
+          : Response.json({ error: { code: 'Request_ResourceNotFound', message: 'not found' } }, { status: 404 });
       }
       if (req.method === 'POST' && url.pathname === '/v1.0/users') {
+        created = true;
         return Response.json(
           { id: 'new-id', userPrincipalName: 'new@contoso.com', displayName: 'New User' },
           { status: 201 },
@@ -85,7 +91,7 @@ describe('Microsoft 365 gateway export', () => {
       userPrincipalName: 'new@contoso.com',
     });
 
-    expect(result.structuredContent).toMatchObject({ id: 'new-id', generatedPassword: true });
+    expect(result.structuredContent).toMatchObject({ id: 'new-id', generatedPassword: true, replicated: true });
     expect(typeof (result.structuredContent as { temporaryPassword: string }).temporaryPassword).toBe('string');
 
     const postBody = JSON.parse((await requests[1]!.text()) || '{}');
