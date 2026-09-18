@@ -9,6 +9,7 @@ import {
   pimSelfActivateRole,
   removeGroupMember,
   removeLicense,
+  resetPassword,
   setManager,
   setUsageLocation,
   updateUser,
@@ -248,6 +249,20 @@ export const microsoft365GatewayTools: GatewayToolDefinition[] = [
     },
   },
   {
+    name: 'reset_password',
+    title: 'Reset user password',
+    description:
+      'Give an existing user a new temporary password, which they must change at next sign-in. Returns it once.',
+    riskLevel: 'write',
+    enabledByDefault: false,
+    inputSchema: {
+      type: 'object',
+      required: ['user'],
+      properties: { user: userRef },
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'set_manager',
     title: 'Set user manager',
     description: "Set a user's manager by object id or userPrincipalName.",
@@ -412,6 +427,12 @@ export function createMicrosoft365Gateway(options: Microsoft365GatewayOptions = 
           return jsonResult(
             'Updated user.',
             await updateUser(client, requiredString(input.user, 'user'), updateUserPatch(input)),
+          );
+
+        case 'reset_password':
+          return jsonResult(
+            'Reset password.',
+            await resetPassword(client, requiredString(input.user, 'user')),
           );
 
         case 'set_manager':
