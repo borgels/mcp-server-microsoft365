@@ -315,3 +315,18 @@ describe('Microsoft 365 gateway export', () => {
     expect(result.isError).toBe(true);
   });
 });
+
+describe('password reset', () => {
+  it('sets a new temporary password that must be changed at next sign-in', async () => {
+    const { gateway, requests } = makeGateway(() => new Response(null, { status: 204 }));
+
+    const result = await gateway.callTool('reset_password', { user: 'ksk@one-group.dk' });
+
+    const body = JSON.parse((await requests[0]!.text()) || '{}');
+    expect(requests[0]!.method).toBe('PATCH');
+    expect(body.passwordProfile.forceChangePasswordNextSignIn).toBe(true);
+    const password = (result.structuredContent as { temporaryPassword: string }).temporaryPassword;
+    expect(password).toBe(body.passwordProfile.password);
+    expect(password.length).toBeGreaterThan(12);
+  });
+});
