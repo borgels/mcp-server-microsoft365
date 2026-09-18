@@ -17,6 +17,8 @@ export interface CreateUserInput {
 
 export interface CreateUserResult {
   id: string;
+  /** False when the new object was still not addressable by UPN when we gave up waiting. */
+  replicated: boolean;
   userPrincipalName: string;
   displayName: string;
   usageLocation?: string;
@@ -57,6 +59,28 @@ async function upnExists(client: GraphClient, userPrincipalName: string): Promis
   }
 }
 
+/**
+ * Wait until a newly created user answers by userPrincipalName.
+ *
+ * Entra replicates a new directory object asynchronously: the POST returns an
+ * id, and for a few seconds afterwards a write that addresses the same user by
+ * UPN still gets `404 Request_ResourceNotFound`. Seen live one second after
+ * creation, on `PUT /users/{upn}/manager/$ref` (#78020) — which aborted an
+ * onboarding that had only just started.
+ *
+ * The caller cannot reasonably be asked to sleep, and retrying every 404 would
+ * slow down the paths that legitimately expect one (removeManager treats it as
+ * "no manager set"), so the wait belongs here: the one place that knows an
+ * object was JUST created and is therefore expected to appear.
+ */
+async function waitForUser(client: GraphClient, userPrincipalName: string, attempts = 8, delayMs = 1_500): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await upnExists(client, userPrincipalName)) return true;
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+  return upnExists(client, userPrincipalName);
+}
+
 export async function createUser(client: GraphClient, input: CreateUserInput): Promise<CreateUserResult> {
   const userPrincipalName = input.userPrincipalName.trim();
   const displayName = input.displayName.trim();
@@ -92,8 +116,12 @@ export async function createUser(client: GraphClient, input: CreateUserInput): P
   );
 
   const created = response.data;
+  // Do not hand back a user the next call cannot address yet.
+  const replicated = await waitForUser(client, created.userPrincipalName ?? userPrincipalName);
+
   return {
     id: created.id,
+    replicated,
     userPrincipalName: created.userPrincipalName ?? userPrincipalName,
     displayName: created.displayName ?? displayName,
     usageLocation: created.usageLocation ?? input.usageLocation,
