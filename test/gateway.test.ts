@@ -194,6 +194,7 @@ describe('Microsoft 365 gateway export', () => {
   });
 
   it('sets a manager via PUT manager/$ref with a directoryObjects reference', async () => {
+    const id = '11111111-2222-3333-4444-555555555555';
     const { gateway, requests } = makeGateway(req => {
       const url = new URL(req.url);
       if (req.method === 'PUT' && url.pathname === '/v1.0/users/u1/manager/$ref') {
@@ -202,10 +203,31 @@ describe('Microsoft 365 gateway export', () => {
       throw new Error(`unexpected ${req.method} ${url.pathname}`);
     });
 
-    const result = await gateway.callTool('set_manager', { user: 'u1', manager: 'mgr-1' });
-    expect(result.structuredContent).toMatchObject({ userId: 'u1', managerId: 'mgr-1' });
+    const result = await gateway.callTool('set_manager', { user: 'u1', manager: id });
+    expect(result.structuredContent).toMatchObject({ userId: 'u1', managerId: id });
     const body = JSON.parse((await requests[0]!.text()) || '{}');
-    expect(body['@odata.id']).toContain('/directoryObjects/mgr-1');
+    expect(body['@odata.id']).toContain(`/directoryObjects/${id}`);
+  });
+
+  it('resolves a manager given by UPN to an object id first (#78020)', async () => {
+    // /directoryObjects addresses an object id and nothing else; a UPN produced
+    // 400 Request_BadRequest: Invalid object identifier 'jeo@onedanmark.dk'.
+    const id = '99999999-8888-7777-6666-555555555555';
+    const { gateway, requests } = makeGateway(req => {
+      const url = new URL(req.url);
+      if (req.method === 'GET' && decodeURIComponent(url.pathname) === '/v1.0/users/jeo@onedanmark.dk') {
+        return Response.json({ id }, { status: 200 });
+      }
+      if (req.method === 'PUT' && decodeURIComponent(url.pathname) === '/v1.0/users/moe@onedanmark.dk/manager/$ref') {
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`unexpected ${req.method} ${url.pathname}`);
+    });
+
+    const result = await gateway.callTool('set_manager', { user: 'moe@onedanmark.dk', manager: 'jeo@onedanmark.dk' });
+    expect(result.structuredContent).toMatchObject({ managerObjectId: id });
+    const put = requests.find(r => r.method === 'PUT')!;
+    expect(JSON.parse((await put.text()) || '{}')['@odata.id']).toContain(`/directoryObjects/${id}`);
   });
 
   it('regenerates a Temporary Access Pass until the passcode is alphanumeric', async () => {

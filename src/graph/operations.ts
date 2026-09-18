@@ -340,13 +340,29 @@ export async function setManager(
   client: GraphClient,
   userId: string,
   managerId: string,
-): Promise<{ userId: string; managerId: string }> {
+): Promise<{ userId: string; managerId: string; managerObjectId: string }> {
+  // /directoryObjects addresses an OBJECT ID and nothing else. The tool takes a
+  // userRef like every other tool here, so a UPN arrives routinely and produced
+  // `400 Request_BadRequest: Invalid object identifier 'jeo@onedanmark.dk'`
+  // (#78020). Resolve it rather than making every caller remember.
+  const managerObjectId = await resolveObjectId(client, managerId);
   await client.request({
     method: 'PUT',
     path: `/users/${encodeURIComponent(userId)}/manager/$ref`,
-    body: { '@odata.id': client.directoryObjectUrl(managerId) },
+    body: { '@odata.id': client.directoryObjectUrl(managerObjectId) },
   });
-  return { userId, managerId };
+  return { userId, managerId, managerObjectId };
+}
+
+const OBJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** An object id passes through; anything else is looked up as a user. */
+async function resolveObjectId(client: GraphClient, ref: string): Promise<string> {
+  if (OBJECT_ID.test(ref.trim())) return ref.trim();
+  const response = await client.get<{ id?: string }>(`/users/${encodeURIComponent(ref)}`, { $select: 'id' });
+  const id = response.data?.id;
+  if (!id) throw new Error(`Could not resolve "${ref}" to a directory object id.`);
+  return id;
 }
 
 /** Remove a user's manager assignment. Idempotent when no manager is set. */
