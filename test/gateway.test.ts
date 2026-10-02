@@ -211,20 +211,20 @@ describe('Microsoft 365 gateway export', () => {
 
   it('resolves a manager given by UPN to an object id first (#78020)', async () => {
     // /directoryObjects addresses an object id and nothing else; a UPN produced
-    // 400 Request_BadRequest: Invalid object identifier 'jeo@onedanmark.dk'.
+    // 400 Request_BadRequest: Invalid object identifier 'manager@example.com'.
     const id = '99999999-8888-7777-6666-555555555555';
     const { gateway, requests } = makeGateway(req => {
       const url = new URL(req.url);
-      if (req.method === 'GET' && decodeURIComponent(url.pathname) === '/v1.0/users/jeo@onedanmark.dk') {
+      if (req.method === 'GET' && decodeURIComponent(url.pathname) === '/v1.0/users/manager@example.com') {
         return Response.json({ id }, { status: 200 });
       }
-      if (req.method === 'PUT' && decodeURIComponent(url.pathname) === '/v1.0/users/moe@onedanmark.dk/manager/$ref') {
+      if (req.method === 'PUT' && decodeURIComponent(url.pathname) === '/v1.0/users/employee@example.com/manager/$ref') {
         return new Response(null, { status: 204 });
       }
       throw new Error(`unexpected ${req.method} ${url.pathname}`);
     });
 
-    const result = await gateway.callTool('set_manager', { user: 'moe@onedanmark.dk', manager: 'jeo@onedanmark.dk' });
+    const result = await gateway.callTool('set_manager', { user: 'employee@example.com', manager: 'manager@example.com' });
     expect(result.structuredContent).toMatchObject({ managerObjectId: id });
     const put = requests.find(r => r.method === 'PUT')!;
     expect(JSON.parse((await put.text()) || '{}')['@odata.id']).toContain(`/directoryObjects/${id}`);
@@ -342,7 +342,7 @@ describe('password reset', () => {
   it('sets a new temporary password that must be changed at next sign-in', async () => {
     const { gateway, requests } = makeGateway(() => new Response(null, { status: 204 }));
 
-    const result = await gateway.callTool('reset_password', { user: 'ksk@one-group.dk' });
+    const result = await gateway.callTool('reset_password', { user: 'partner@example.com' });
 
     const body = JSON.parse((await requests[0]!.text()) || '{}');
     expect(requests[0]!.method).toBe('PATCH');
@@ -359,7 +359,7 @@ describe('replication lag on writes', () => {
     let gets = 0;
     const missing = () =>
       Response.json(
-        { error: { code: 'Request_ResourceNotFound', message: "Resource 'ksk@one-group.dk' does not exist" } },
+        { error: { code: 'Request_ResourceNotFound', message: "Resource 'partner@example.com' does not exist" } },
         { status: 404 },
       );
     const { gateway } = makeGateway(req => {
@@ -371,11 +371,11 @@ describe('replication lag on writes', () => {
       return missing();
     });
 
-    await gateway.callTool('update_user', { user: 'ksk@one-group.dk', jobTitle: 'Partner' });
+    await gateway.callTool('update_user', { user: 'partner@example.com', jobTitle: 'Partner' });
     expect(patches).toBe(3);
 
     // A read that says "not found" is an answer, not a symptom.
-    await expect(gateway.callTool('get_user', { user: 'nobody@one-group.dk' })).rejects.toThrow();
+    await expect(gateway.callTool('get_user', { user: 'nobody@example.com' })).rejects.toThrow();
     expect(gets).toBe(1);
   }, 20_000);
 });

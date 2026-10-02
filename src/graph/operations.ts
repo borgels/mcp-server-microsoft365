@@ -343,7 +343,7 @@ export async function setManager(
 ): Promise<{ userId: string; managerId: string; managerObjectId: string }> {
   // /directoryObjects addresses an OBJECT ID and nothing else. The tool takes a
   // userRef like every other tool here, so a UPN arrives routinely and produced
-  // `400 Request_BadRequest: Invalid object identifier 'jeo@onedanmark.dk'`
+  // `400 Request_BadRequest: Invalid object identifier 'manager@example.com'`
   // (#78020). Resolve it rather than making every caller remember.
   const managerObjectId = await resolveObjectId(client, managerId);
   await client.request({
