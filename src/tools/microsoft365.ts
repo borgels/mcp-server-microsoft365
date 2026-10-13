@@ -17,6 +17,8 @@ import {
   setUsageLocation,
   updateUser,
 } from '../graph/operations.js';
+import { pathSegment } from '../graph/path.js';
+import { protectionPolicyFromEnv, type ProtectionPolicy } from '../graph/protection.js';
 
 export const READ_TOOL_ANNOTATIONS = {
   readOnlyHint: true,
@@ -57,6 +59,13 @@ const listShape = {
 export interface RegisterToolsOptions {
   /** Register write/destructive tools. Off by default: the container then exposes read tools only. */
   enableWrites?: boolean;
+  /**
+   * Guardrails for reset_password, Temporary Access Pass and group membership tools.
+   * Defaults to the environment (MS_ENABLE_PASSWORD_RESET, MS_ENABLE_TAP,
+   * MS_PROTECTED_USERS, MS_PROTECTED_GROUPS). reset_password is registered only when
+   * allowPasswordReset is true, the TAP tools only when allowTap is true.
+   */
+  protection?: ProtectionPolicy;
 }
 
 type RegisterTool = McpServer['registerTool'];
@@ -74,7 +83,11 @@ function gatedRegistrar(server: McpServer, enableWrites: boolean): RegisterTool 
 }
 
 export function registerMicrosoft365Tools(server: McpServer, client: GraphClient, options: RegisterToolsOptions = {}): void {
-  const register = gatedRegistrar(server, options.enableWrites ?? false);
+  const enableWrites = options.enableWrites ?? false;
+  const policy = options.protection ?? protectionPolicyFromEnv();
+  const register = gatedRegistrar(server, enableWrites);
+  const registerIf = (enabled: boolean): RegisterTool =>
+    enabled ? register : ((() => undefined) as unknown as RegisterTool);
   register(
     'get_user',
     {
@@ -84,7 +97,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       annotations: READ_TOOL_ANNOTATIONS,
     },
     async input =>
-      runTool(async () => jsonToolResult(await client.get(`/users/${encodeURIComponent(input.user)}`, readQuery(input)))),
+      runTool(async () => jsonToolResult(await client.get(`/users/${pathSegment(input.user, 'user')}`, readQuery(input)))),
   );
 
   register(
@@ -129,7 +142,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       annotations: READ_TOOL_ANNOTATIONS,
     },
     async input =>
-      runTool(async () => jsonToolResult(await client.get(`/groups/${encodeURIComponent(input.groupId)}`, readQuery(input)))),
+      runTool(async () => jsonToolResult(await client.get(`/groups/${pathSegment(input.groupId, 'groupId')}`, readQuery(input)))),
   );
 
   register(
@@ -142,7 +155,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     },
     async input =>
       runTool(async () =>
-        jsonToolResult(await client.get(`/groups/${encodeURIComponent(input.groupId)}/members`, readQuery(input))),
+        jsonToolResult(await client.get(`/groups/${pathSegment(input.groupId, 'groupId')}/members`, readQuery(input))),
       ),
   );
 
@@ -155,7 +168,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       annotations: READ_TOOL_ANNOTATIONS,
     },
     async input =>
-      runTool(async () => jsonToolResult(await client.get(`/users/${encodeURIComponent(input.user)}/licenseDetails`))),
+      runTool(async () => jsonToolResult(await client.get(`/users/${pathSegment(input.user, 'user')}/licenseDetails`))),
   );
 
   // --- Intune (read) ---------------------------------------------------------
@@ -173,7 +186,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     async input =>
       runTool(async () =>
         jsonToolResult(
-          await client.get(`/users/${encodeURIComponent(input.user)}/managedDevices`, {
+          await client.get(`/users/${pathSegment(input.user, 'user')}/managedDevices`, {
             $select: (input.select ?? ['id', 'deviceName', 'operatingSystem', 'osVersion', 'model', 'manufacturer', 'complianceState', 'managedDeviceOwnerType', 'lastSyncDateTime', 'enrolledDateTime', 'azureADDeviceId']).join(','),
           }),
         ),
@@ -298,7 +311,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       inputSchema: { groupId, userId: userRef },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async input => runTool(async () => jsonToolResult(await addGroupMember(client, input.groupId, input.userId))),
+    async input => runTool(async () => jsonToolResult(await addGroupMember(client, input.groupId, input.userId, policy))),
   );
 
   register(
@@ -309,7 +322,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       inputSchema: { groupId, userId: userRef },
       annotations: DESTRUCTIVE_TOOL_ANNOTATIONS,
     },
-    async input => runTool(async () => jsonToolResult(await removeGroupMember(client, input.groupId, input.userId))),
+    async input => runTool(async () => jsonToolResult(await removeGroupMember(client, input.groupId, input.userId, policy))),
   );
 
   register(
@@ -358,16 +371,16 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     },
   );
 
-  register(
+  registerIf(policy.allowPasswordReset)(
     'reset_password',
     {
       title: 'Reset User Password',
       description:
-        'Give an existing user a new temporary password, which they must change at next sign-in. Returns it once. Use when someone has to get into an account for the first time and the password from creation is gone, stale, or was seen by more people than it should have been.',
+        'Give an existing (non-privileged) user a new temporary password, which they must change at next sign-in. Returns it once. Use when someone has to get into an account for the first time and the password from creation is gone, stale, or was seen by more people than it should have been.',
       inputSchema: { user: userRef },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async input => runTool(async () => jsonToolResult(await resetPassword(client, input.user))),
+    async input => runTool(async () => jsonToolResult(await resetPassword(client, input.user, policy))),
   );
 
   register(
@@ -381,7 +394,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     async input => runTool(async () => jsonToolResult(await setManager(client, input.user, input.manager))),
   );
 
-  register(
+  registerIf(policy.allowTap)(
     'create_temporary_access_pass',
     {
       title: 'Create Temporary Access Pass',
@@ -399,11 +412,11 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     },
     async input => {
       const { user, ...tap } = input;
-      return runTool(async () => jsonToolResult(await createTemporaryAccessPass(client, user, tap)));
+      return runTool(async () => jsonToolResult(await createTemporaryAccessPass(client, user, tap, policy)));
     },
   );
 
-  register(
+  registerIf(policy.allowTap)(
     'delete_temporary_access_pass',
     {
       title: 'Delete Temporary Access Pass',
@@ -411,7 +424,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       inputSchema: { user: userRef, methodId: z.string().trim().min(1).optional() },
       annotations: DESTRUCTIVE_TOOL_ANNOTATIONS,
     },
-    async input => runTool(async () => jsonToolResult(await deleteTemporaryAccessPass(client, input.user, input.methodId))),
+    async input => runTool(async () => jsonToolResult(await deleteTemporaryAccessPass(client, input.user, input.methodId, policy))),
   );
 
   register(

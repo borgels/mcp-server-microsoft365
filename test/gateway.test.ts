@@ -3,11 +3,37 @@ import { createMicrosoft365Gateway, microsoft365GatewayTools } from '../src/gate
 
 const BASE = 'https://graph.example.test/v1.0';
 
+const PERMISSIVE = { allowPasswordReset: true, allowTap: true, protectedUsers: [], protectedGroups: [] };
+
+/**
+ * Answers the directory lookups the privileged-target guard performs (user,
+ * transitiveMemberOf, roleAssignments, group) as an ordinary, unprivileged
+ * target, and passes everything else to `handler`.
+ */
+function ordinaryDirectory(handler: (req: Request) => Promise<Response> | Response) {
+  return (req: Request) => {
+    const url = new URL(req.url);
+    const path = url.pathname;
+    if (req.method === 'GET') {
+      if (path.endsWith('/transitiveMemberOf')) return Response.json({ value: [] });
+      if (path === '/v1.0/roleManagement/directory/roleAssignments') return Response.json({ value: [] });
+      if (url.searchParams.get('$select') === 'id,userPrincipalName,mail') {
+        return Response.json({ id: decodeURIComponent(path.split('/').pop()!), userPrincipalName: 'x@example.com' });
+      }
+      if (url.searchParams.get('$select') === 'id,displayName,mailNickname,isAssignableToRole') {
+        return Response.json({ id: decodeURIComponent(path.split('/').pop()!), isAssignableToRole: false });
+      }
+    }
+    return handler(req);
+  };
+}
+
 function makeGateway(handler: (req: Request) => Promise<Response> | Response) {
   const requests: Request[] = [];
   const gateway = createMicrosoft365Gateway({
     accessToken: 'graph-token',
     baseUrl: BASE,
+    protection: PERMISSIVE,
     fetchImpl: async (input, init) => {
       const req = new Request(input, init);
       requests.push(req);
@@ -152,12 +178,12 @@ describe('Microsoft 365 gateway export', () => {
   });
 
   it('treats an already-existing group membership as idempotent success', async () => {
-    const { gateway } = makeGateway(() =>
+    const { gateway } = makeGateway(ordinaryDirectory(() =>
       Response.json(
         { error: { code: 'Request_BadRequest', message: 'One or more added object references already exist' } },
         { status: 400 },
       ),
-    );
+    ));
 
     const result = await gateway.callTool('add_group_member', { groupId: 'g1', userId: 'u1' });
     expect(result.structuredContent).toMatchObject({ added: false, alreadyMember: true });
@@ -233,7 +259,7 @@ describe('Microsoft 365 gateway export', () => {
   it('regenerates a Temporary Access Pass until the passcode is alphanumeric', async () => {
     let posts = 0;
     const deletes: string[] = [];
-    const { gateway } = makeGateway(req => {
+    const { gateway } = makeGateway(ordinaryDirectory(req => {
       const url = new URL(req.url);
       const path = url.pathname;
       const base = '/v1.0/users/u1/authentication/temporaryAccessPassMethods';
@@ -250,7 +276,7 @@ describe('Microsoft 365 gateway export', () => {
         return new Response(null, { status: 204 });
       }
       throw new Error(`unexpected ${req.method} ${path}`);
-    });
+    }));
 
     const result = await gateway.callTool('create_temporary_access_pass', { user: 'u1' });
     expect(result.structuredContent).toMatchObject({ temporaryAccessPass: 'hn3WugkJ', id: 'tap-2', attempts: 2 });
@@ -340,12 +366,12 @@ describe('Microsoft 365 gateway export', () => {
 
 describe('password reset', () => {
   it('sets a new temporary password that must be changed at next sign-in', async () => {
-    const { gateway, requests } = makeGateway(() => new Response(null, { status: 204 }));
+    const { gateway, requests } = makeGateway(ordinaryDirectory(() => new Response(null, { status: 204 })));
 
     const result = await gateway.callTool('reset_password', { user: 'partner@example.com' });
 
-    const body = JSON.parse((await requests[0]!.text()) || '{}');
-    expect(requests[0]!.method).toBe('PATCH');
+    const patch = requests.find(r => r.method === 'PATCH')!;
+    const body = JSON.parse((await patch.text()) || '{}');
     expect(body.passwordProfile.forceChangePasswordNextSignIn).toBe(true);
     const password = (result.structuredContent as { temporaryPassword: string }).temporaryPassword;
     expect(password).toBe(body.passwordProfile.password);
