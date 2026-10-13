@@ -3,9 +3,21 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it } from 'vitest';
 import { createServer, writesEnabledFromEnv } from '../src/server.js';
 
-async function listToolNames(enableWrites: boolean): Promise<string[]> {
+async function listToolNames(
+  enableWrites: boolean,
+  flags: { allowPasswordReset?: boolean; allowTap?: boolean } = { allowPasswordReset: true, allowTap: true },
+): Promise<string[]> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const server = createServer({ enableWrites, clientOptions: { accessToken: 'test-token' } });
+  const server = createServer({
+    enableWrites,
+    clientOptions: { accessToken: 'test-token' },
+    protection: {
+      allowPasswordReset: flags.allowPasswordReset ?? false,
+      allowTap: flags.allowTap ?? false,
+      protectedUsers: [],
+      protectedGroups: [],
+    },
+  });
   await server.connect(serverTransport);
   const client = new Client({ name: 'test', version: '0.0.0' });
   await client.connect(clientTransport);
@@ -39,6 +51,21 @@ describe('createServer write gating', () => {
     for (const read of READ_TOOLS) expect(names).toContain(read);
     expect(names).toEqual(expect.arrayContaining(['create_user', 'assign_license', 'add_group_member', 'create_temporary_access_pass', 'delete_temporary_access_pass']));
     expect(names.length).toBeGreaterThan(READ_TOOLS.length);
+  });
+
+  it('keeps reset_password and the TAP tools off unless their own flags are set', async () => {
+    const names = await listToolNames(true, {});
+    expect(names).toContain('create_user');
+    expect(names).not.toContain('reset_password');
+    expect(names).not.toContain('create_temporary_access_pass');
+    expect(names).not.toContain('delete_temporary_access_pass');
+
+    const resetOnly = await listToolNames(true, { allowPasswordReset: true });
+    expect(resetOnly).toContain('reset_password');
+    expect(resetOnly).not.toContain('create_temporary_access_pass');
+
+    // The flags never override MS_ENABLE_WRITES.
+    expect(await listToolNames(false)).toEqual(READ_TOOLS);
   });
 
   it('reads the flag strictly from the environment', () => {

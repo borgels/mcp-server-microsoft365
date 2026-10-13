@@ -1,4 +1,5 @@
 import { GraphHttpError } from '../errors.js';
+import { pathSegment } from './path.js';
 
 export const GRAPH_DEFAULT_BASE_URL = 'https://graph.microsoft.com/v1.0';
 export const GRAPH_DEFAULT_AUTHORITY_HOST = 'https://login.microsoftonline.com';
@@ -185,7 +186,7 @@ export class GraphClient {
 
   /** URL for a `directoryObjects/{id}` reference, used by `$ref` membership calls. */
   directoryObjectUrl(id: string): string {
-    return `${this.baseUrl}/directoryObjects/${encodeURIComponent(id)}`;
+    return `${this.baseUrl}/directoryObjects/${pathSegment(id, 'id')}`;
   }
 
   async getTokenMetadata(): Promise<{ authMethod: string; tenantId?: string; expiresAt?: string }> {
@@ -332,8 +333,12 @@ export class GraphClient {
 
   private url(path: string, query: Record<string, GraphQueryValue> = {}): string {
     if (/^https?:\/\//i.test(path)) {
-      // Support absolute @odata.nextLink follow-through.
+      // Support absolute @odata.nextLink follow-through, but never send the
+      // bearer token to a host other than the configured Graph endpoint.
       const absolute = new URL(path);
+      if (absolute.origin !== new URL(this.baseUrl).origin) {
+        throw new Error(`Refusing to follow a Graph link to a different origin: ${absolute.origin}`);
+      }
       for (const [key, value] of Object.entries(query)) {
         appendQueryValue(absolute.searchParams, key, value);
       }
@@ -397,7 +402,10 @@ function appendQueryValue(searchParams: URLSearchParams, key: string, value: Gra
 }
 
 function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, '');
+  // Linear scan instead of /\/+$/ (which backtracks polynomially on long runs of '/').
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47 /* '/' */) end -= 1;
+  return value.slice(0, end);
 }
 
 function assertSafeBaseUrl(baseUrl: string): void {

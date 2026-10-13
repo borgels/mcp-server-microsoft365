@@ -55,6 +55,7 @@ Grant the app registration only what it needs, then admin-consent:
 | Assign / remove licenses | `LicenseAssignment.ReadWrite.All` |
 | Manage group membership | `GroupMember.ReadWrite.All` |
 | Create / delete Temporary Access Pass | `UserAuthenticationMethod.ReadWrite.All` |
+| Privileged-target check (before password reset, TAP, group membership) | `RoleManagement.Read.Directory` + `GroupMember.Read.All` (or `Directory.Read.All`) |
 | Read Intune devices (`list_user_devices`, `list_managed_devices`) | `DeviceManagementManagedDevices.Read.All` |
 | Read Intune configuration / compliance policies | `DeviceManagementConfiguration.Read.All` |
 | JIT PIM role activation (`activate_pim_role`, delegated) | delegated `RoleManagement.ReadWrite.Directory` (bounded by the user's eligible roles) |
@@ -164,6 +165,41 @@ The default is read-only, so a container started without the flag exposes the se
 read tools and nothing else; callers see write tools as unknown rather than forbidden.
 Gating is by tool annotation (`readOnlyHint`), so a new write tool is off by default.
 
+### Account-takeover operations
+
+Password reset and Temporary Access Pass hand a working credential to whoever
+called the tool, so they have their own opt-in on top of `MS_ENABLE_WRITES=true`:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `MS_ENABLE_PASSWORD_RESET` | `false` | Registers `reset_password` (only exactly `true` enables it). |
+| `MS_ENABLE_TAP` | `false` | Registers `create_temporary_access_pass` / `delete_temporary_access_pass`. |
+| `MS_PROTECTED_USERS` | empty | Comma-separated object ids / UPNs / mail addresses that are always refused. |
+| `MS_PROTECTED_GROUPS` | empty | Comma-separated group object ids / display names / mailNicknames that are always refused. |
+
+Before `reset_password`, `create_temporary_access_pass`, `add_group_member` and
+`remove_group_member` the server checks the target and **refuses** when:
+
+- the user holds a directory role (`transitiveMemberOf` contains a `directoryRole`)
+  or has any entry in `/roleManagement/directory/roleAssignments` (including
+  administrative-unit scoped roles);
+- the user is a member of a role-assignable group, or of a group in `MS_PROTECTED_GROUPS`;
+- the user matches `MS_PROTECTED_USERS`;
+- the group is role-assignable (`isAssignableToRole=true`) or is in `MS_PROTECTED_GROUPS`.
+
+If any of these lookups fails (missing permission, throttling, unexpected
+response) the operation is refused: the check fails closed. Privileged accounts
+are meant to be handled by a human in the Entra portal. PIM-*eligible* (not
+active) role holders are not detected by these lookups; list such accounts in
+`MS_PROTECTED_USERS`.
+
+### Identifier validation
+
+Identifiers that end up in a Graph URL path (user, group, method ids) must not be
+empty, `.` or `..`, and must not contain `/`, `\`, `?`, `#` or percent-encoded
+`.`, `/` or `\`. Guest accounts whose UPN contains `#EXT#` must therefore be
+addressed by object id.
+
 ## Streamable HTTP transport
 
 ```sh
@@ -171,7 +207,7 @@ npm run dev:http
 ```
 
 The HTTP transport binds to `127.0.0.1` by default and serves `POST /mcp`. Set
-`MCP_HTTP_TOKEN` to require bearer auth, and `MCP_ALLOWED_ORIGINS` for
+`MCP_HTTP_TOKEN` to require bearer auth (compared in constant time), and `MCP_ALLOWED_ORIGINS` for
 browser-based local clients. `MCP_MAX_BODY_BYTES` defaults to `10485760`
 (10 MiB).
 

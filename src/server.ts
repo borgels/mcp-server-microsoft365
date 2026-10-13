@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { GraphClient, type GraphClientOptions } from './graph/client.js';
+import { type ProtectionPolicy } from './graph/protection.js';
 import { registerMicrosoft365Tools } from './tools/microsoft365.js';
 
 export interface CreateServerOptions {
@@ -10,6 +11,8 @@ export interface CreateServerOptions {
   clientOptions?: GraphClientOptions;
   /** Expose write/destructive tools. Defaults to MS_ENABLE_WRITES=true in the environment, else false. */
   enableWrites?: boolean;
+  /** Guardrails for password reset / TAP / group membership. Defaults to the environment. */
+  protection?: ProtectionPolicy;
 }
 
 export function writesEnabledFromEnv(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -25,7 +28,10 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
   });
 
   const client = options.client ?? new GraphClient(options.clientOptions);
-  registerMicrosoft365Tools(server, client, { enableWrites: options.enableWrites ?? writesEnabledFromEnv() });
+  registerMicrosoft365Tools(server, client, {
+    enableWrites: options.enableWrites ?? writesEnabledFromEnv(),
+    protection: options.protection,
+  });
 
   return server;
 }

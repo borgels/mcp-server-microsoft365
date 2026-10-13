@@ -15,6 +15,8 @@ import {
   updateUser,
   type UpdateUserInput,
 } from './graph/operations.js';
+import { pathSegment } from './graph/path.js';
+import { protectionPolicyFromEnv, type ProtectionPolicy } from './graph/protection.js';
 
 export type GatewayRiskLevel = 'read' | 'write' | 'destructive';
 export type GatewayJsonValue = string | number | boolean | null | GatewayJsonValue[] | { [key: string]: GatewayJsonValue };
@@ -35,7 +37,15 @@ export interface GatewayToolResult {
   isError?: boolean;
 }
 
-export interface Microsoft365GatewayOptions extends GraphClientOptions {}
+export interface Microsoft365GatewayOptions extends GraphClientOptions {
+  /**
+   * Guardrails for reset_password, Temporary Access Pass and group membership.
+   * Defaults to the environment (MS_ENABLE_PASSWORD_RESET, MS_ENABLE_TAP,
+   * MS_PROTECTED_USERS, MS_PROTECTED_GROUPS); password reset and TAP are refused
+   * unless explicitly enabled.
+   */
+  protection?: Partial<ProtectionPolicy>;
+}
 
 const userRef = { type: 'string', description: 'User object id (GUID) or userPrincipalName.' } satisfies GatewayJsonObject;
 const groupRef = { type: 'string', description: 'Group object id (GUID).' } satisfies GatewayJsonObject;
@@ -331,7 +341,12 @@ export const microsoft365GatewayTools: GatewayToolDefinition[] = [
 ];
 
 export function createMicrosoft365Gateway(options: Microsoft365GatewayOptions = {}) {
-  const client = new GraphClient(options);
+  const { protection, ...clientOptions } = options;
+  const client = new GraphClient(clientOptions);
+  const policy: ProtectionPolicy = { ...protectionPolicyFromEnv() };
+  for (const [key, value] of Object.entries(protection ?? {})) {
+    if (value !== undefined) (policy as unknown as Record<string, unknown>)[key] = value;
+  }
 
   return {
     tools: microsoft365GatewayTools,
@@ -340,7 +355,7 @@ export function createMicrosoft365Gateway(options: Microsoft365GatewayOptions = 
         case 'get_user':
           return jsonResult(
             'Fetched user.',
-            await client.get(`/users/${encodeURIComponent(requiredString(input.user, 'user'))}`, readQuery(input)),
+            await client.get(`/users/${pathSegment(requiredString(input.user, 'user'), 'user')}`, readQuery(input)),
           );
 
         case 'list_users':
@@ -355,19 +370,19 @@ export function createMicrosoft365Gateway(options: Microsoft365GatewayOptions = 
         case 'get_group':
           return jsonResult(
             'Fetched group.',
-            await client.get(`/groups/${encodeURIComponent(requiredString(input.groupId, 'groupId'))}`, readQuery(input)),
+            await client.get(`/groups/${pathSegment(requiredString(input.groupId, 'groupId'), 'groupId')}`, readQuery(input)),
           );
 
         case 'list_group_members':
           return jsonResult(
             'Fetched group members.',
-            await client.get(`/groups/${encodeURIComponent(requiredString(input.groupId, 'groupId'))}/members`, readQuery(input)),
+            await client.get(`/groups/${pathSegment(requiredString(input.groupId, 'groupId'), 'groupId')}/members`, readQuery(input)),
           );
 
         case 'get_user_license_details':
           return jsonResult(
             'Fetched user license details.',
-            await client.get(`/users/${encodeURIComponent(requiredString(input.user, 'user'))}/licenseDetails`),
+            await client.get(`/users/${pathSegment(requiredString(input.user, 'user'), 'user')}/licenseDetails`),
           );
 
         case 'create_user':
@@ -408,13 +423,13 @@ export function createMicrosoft365Gateway(options: Microsoft365GatewayOptions = 
         case 'add_group_member':
           return jsonResult(
             'Added group member.',
-            await addGroupMember(client, requiredString(input.groupId, 'groupId'), requiredString(input.userId, 'userId')),
+            await addGroupMember(client, requiredString(input.groupId, 'groupId'), requiredString(input.userId, 'userId'), policy),
           );
 
         case 'remove_group_member':
           return jsonResult(
             'Removed group member.',
-            await removeGroupMember(client, requiredString(input.groupId, 'groupId'), requiredString(input.userId, 'userId')),
+            await removeGroupMember(client, requiredString(input.groupId, 'groupId'), requiredString(input.userId, 'userId'), policy),
           );
 
         case 'set_usage_location':
@@ -432,7 +447,7 @@ export function createMicrosoft365Gateway(options: Microsoft365GatewayOptions = 
         case 'reset_password':
           return jsonResult(
             'Reset password.',
-            await resetPassword(client, requiredString(input.user, 'user')),
+            await resetPassword(client, requiredString(input.user, 'user'), policy),
           );
 
         case 'set_manager':
@@ -450,13 +465,13 @@ export function createMicrosoft365Gateway(options: Microsoft365GatewayOptions = 
               startDateTime: stringValue(input.startDateTime),
               requireAlphanumeric: booleanValue(input.requireAlphanumeric),
               maxAttempts: numberValue(input.maxAttempts),
-            }),
+            }, policy),
           );
 
         case 'delete_temporary_access_pass':
           return jsonResult(
             'Deleted Temporary Access Pass.',
-            await deleteTemporaryAccessPass(client, requiredString(input.user, 'user'), stringValue(input.methodId)),
+            await deleteTemporaryAccessPass(client, requiredString(input.user, 'user'), stringValue(input.methodId), policy),
           );
 
         case 'activate_pim_role':
