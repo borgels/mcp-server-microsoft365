@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 export class HttpRequestError extends Error {
@@ -31,9 +32,17 @@ export function assertAuthorized(req: IncomingMessage, config = getHttpConfig())
     return;
   }
 
-  if (req.headers.authorization !== `Bearer ${config.httpToken}`) {
+  const header = req.headers.authorization;
+  if (typeof header !== 'string' || !constantTimeEquals(header, `Bearer ${config.httpToken}`)) {
     throw new HttpRequestError(401, 'Unauthorized');
   }
+}
+
+/** Compare two secrets without leaking their contents or length through timing. */
+export function constantTimeEquals(a: string, b: string): boolean {
+  const left = createHash('sha256').update(a, 'utf8').digest();
+  const right = createHash('sha256').update(b, 'utf8').digest();
+  return timingSafeEqual(left, right);
 }
 
 export function assertAllowedOrigin(req: IncomingMessage): void {

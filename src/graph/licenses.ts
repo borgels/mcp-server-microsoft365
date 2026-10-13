@@ -111,9 +111,11 @@ function toResolution(sku: SubscribedSku, matchedBy: SkuResolution['matchedBy'])
 }
 
 function normalizeKey(value: string): string {
+  // Split on non-alphanumerics and re-join: same result as collapsing runs to '_'
+  // and trimming leading/trailing '_', without a backtracking regex.
   return value
-    .trim()
     .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
+    .split(/[^A-Z0-9]/)
+    .filter(Boolean)
+    .join('_');
 }

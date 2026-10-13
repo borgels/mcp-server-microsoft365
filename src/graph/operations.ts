@@ -2,6 +2,14 @@ import { randomBytes } from 'node:crypto';
 import { GraphHttpError } from '../errors.js';
 import type { GraphClient } from './client.js';
 import { resolveSkuId, type SkuResolution, type SubscribedSku } from './licenses.js';
+import { assertSafePathParam, pathSegment } from './path.js';
+import {
+  assertGroupNotProtected,
+  assertUserNotPrivileged,
+  ProtectedTargetError,
+  protectionPolicyFromEnv,
+  type ProtectionPolicy,
+} from './protection.js';
 
 export interface CreateUserInput {
   displayName: string;
@@ -49,7 +57,7 @@ export function generateTempPassword(): string {
 
 async function upnExists(client: GraphClient, userPrincipalName: string): Promise<boolean> {
   try {
-    await client.get(`/users/${encodeURIComponent(userPrincipalName)}`, { $select: 'id' });
+    await client.get(`/users/${pathSegment(userPrincipalName, 'userPrincipalName')}`, { $select: 'id' });
     return true;
   } catch (error) {
     if (error instanceof GraphHttpError && error.status === 404) {
@@ -135,7 +143,7 @@ export async function setUsageLocation(
   userId: string,
   usageLocation: string,
 ): Promise<{ userId: string; usageLocation: string }> {
-  await client.patch(`/users/${encodeURIComponent(userId)}`, { usageLocation });
+  await client.patch(`/users/${pathSegment(userId, 'userId')}`, { usageLocation });
   return { userId, usageLocation };
 }
 
@@ -145,7 +153,7 @@ export async function listSubscribedSkus(client: GraphClient): Promise<Subscribe
 }
 
 async function getUserUsageLocation(client: GraphClient, userId: string): Promise<string | undefined> {
-  const response = await client.get<{ usageLocation?: string | null }>(`/users/${encodeURIComponent(userId)}`, {
+  const response = await client.get<{ usageLocation?: string | null }>(`/users/${pathSegment(userId, 'userId')}`, {
     $select: 'usageLocation',
   });
   const location = response.data?.usageLocation;
@@ -156,6 +164,7 @@ export async function assignLicense(
   client: GraphClient,
   input: AssignLicenseInput,
 ): Promise<{ userId: string; assigned: SkuResolution; usageLocation: string }> {
+  assertSafePathParam(input.userId, 'userId');
   // usageLocation MUST be set before assigning a license, otherwise Graph
   // rejects the assignment with an "invalid usage location" error.
   let usageLocation = input.usageLocation?.trim();
@@ -184,7 +193,7 @@ export async function assignLicense(
     );
   }
 
-  await client.post(`/users/${encodeURIComponent(input.userId)}/assignLicense`, {
+  await client.post(`/users/${pathSegment(input.userId, 'userId')}/assignLicense`, {
     addLicenses: [{ skuId: resolved.skuId, disabledPlans: input.disabledPlans ?? [] }],
     removeLicenses: [],
   });
@@ -196,6 +205,7 @@ export async function removeLicense(
   client: GraphClient,
   input: RemoveLicenseInput,
 ): Promise<{ userId: string; removed: SkuResolution }> {
+  assertSafePathParam(input.userId, 'userId');
   const skus = await listSubscribedSkus(client);
   const resolved = resolveSkuId(skus, input.license);
   if (!resolved) {
@@ -204,7 +214,7 @@ export async function removeLicense(
     );
   }
 
-  await client.post(`/users/${encodeURIComponent(input.userId)}/assignLicense`, {
+  await client.post(`/users/${pathSegment(input.userId, 'userId')}/assignLicense`, {
     addLicenses: [],
     removeLicenses: [resolved.skuId],
   });
@@ -216,9 +226,12 @@ export async function addGroupMember(
   client: GraphClient,
   groupId: string,
   userId: string,
+  policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ groupId: string; userId: string; added: boolean; alreadyMember: boolean }> {
+  await assertGroupNotProtected(client, groupId, policy);
+  await assertUserNotPrivileged(client, userId, policy);
   try {
-    await client.post(`/groups/${encodeURIComponent(groupId)}/members/$ref`, {
+    await client.post(`/groups/${pathSegment(groupId, 'groupId')}/members/$ref`, {
       '@odata.id': client.directoryObjectUrl(userId),
     });
     return { groupId, userId, added: true, alreadyMember: false };
@@ -234,9 +247,12 @@ export async function removeGroupMember(
   client: GraphClient,
   groupId: string,
   userId: string,
+  policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ groupId: string; userId: string; removed: boolean; alreadyAbsent: boolean }> {
+  await assertGroupNotProtected(client, groupId, policy);
+  await assertUserNotPrivileged(client, userId, policy);
   try {
-    await client.delete(`/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}/$ref`);
+    await client.delete(`/groups/${pathSegment(groupId, 'groupId')}/members/${pathSegment(userId, 'userId')}/$ref`);
     return { groupId, userId, removed: true, alreadyAbsent: false };
   } catch (error) {
     if (error instanceof GraphHttpError && error.status === 404) {
@@ -311,7 +327,7 @@ export async function updateUser(
     throw new Error('updateUser requires at least one field to change.');
   }
 
-  await client.patch(`/users/${encodeURIComponent(userId)}`, body);
+  await client.patch(`/users/${pathSegment(userId, 'userId')}`, body);
   return { userId, updated };
 }
 
@@ -325,11 +341,16 @@ export async function updateUser(
 export async function resetPassword(
   client: GraphClient,
   userId: string,
+  policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ userId: string; temporaryPassword: string; forceChangePasswordNextSignIn: true }> {
+  if (!policy.allowPasswordReset) {
+    throw new ProtectedTargetError('Password reset is disabled. Set MS_ENABLE_PASSWORD_RESET=true (in addition to MS_ENABLE_WRITES=true) to allow it.');
+  }
+  await assertUserNotPrivileged(client, userId, policy);
   const temporaryPassword = generateTempPassword();
   await client.request({
     method: 'PATCH',
-    path: `/users/${encodeURIComponent(userId)}`,
+    path: `/users/${pathSegment(userId, 'userId')}`,
     body: { passwordProfile: { password: temporaryPassword, forceChangePasswordNextSignIn: true } },
   });
   return { userId, temporaryPassword, forceChangePasswordNextSignIn: true };
@@ -348,7 +369,7 @@ export async function setManager(
   const managerObjectId = await resolveObjectId(client, managerId);
   await client.request({
     method: 'PUT',
-    path: `/users/${encodeURIComponent(userId)}/manager/$ref`,
+    path: `/users/${pathSegment(userId, 'userId')}/manager/$ref`,
     body: { '@odata.id': client.directoryObjectUrl(managerObjectId) },
   });
   return { userId, managerId, managerObjectId };
@@ -359,7 +380,7 @@ const OBJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 /** An object id passes through; anything else is looked up as a user. */
 async function resolveObjectId(client: GraphClient, ref: string): Promise<string> {
   if (OBJECT_ID.test(ref.trim())) return ref.trim();
-  const response = await client.get<{ id?: string }>(`/users/${encodeURIComponent(ref)}`, { $select: 'id' });
+  const response = await client.get<{ id?: string }>(`/users/${pathSegment(ref, 'ref')}`, { $select: 'id' });
   const id = response.data?.id;
   if (!id) throw new Error(`Could not resolve "${ref}" to a directory object id.`);
   return id;
@@ -371,7 +392,7 @@ export async function removeManager(
   userId: string,
 ): Promise<{ userId: string; removed: boolean }> {
   try {
-    await client.delete(`/users/${encodeURIComponent(userId)}/manager/$ref`);
+    await client.delete(`/users/${pathSegment(userId, 'userId')}/manager/$ref`);
     return { userId, removed: true };
   } catch (error) {
     if (error instanceof GraphHttpError && error.status === 404) {
@@ -417,7 +438,7 @@ export interface CreateTapResult {
 const ALPHANUMERIC = /^[A-Za-z0-9]+$/;
 
 function tapMethodsPath(userId: string): string {
-  return `/users/${encodeURIComponent(userId)}/authentication/temporaryAccessPassMethods`;
+  return `/users/${pathSegment(userId, 'userId')}/authentication/temporaryAccessPassMethods`;
 }
 
 /**
@@ -430,7 +451,10 @@ export async function createTemporaryAccessPass(
   client: GraphClient,
   userId: string,
   input: CreateTapInput = {},
+  policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<CreateTapResult> {
+  assertTapAllowed(policy);
+  await assertUserNotPrivileged(client, userId, policy);
   const path = tapMethodsPath(userId);
   const requireAlphanumeric = input.requireAlphanumeric !== false;
   const maxAttempts = Math.max(1, input.maxAttempts ?? 8);
@@ -459,7 +483,7 @@ export async function createTemporaryAccessPass(
     }
 
     // Non-alphanumeric passcode: delete it and try again.
-    await client.delete(`${path}/${encodeURIComponent(tap.id)}`);
+    await client.delete(`${path}/${pathSegment(tap.id, 'id')}`);
   }
 
   throw new Error(
@@ -475,18 +499,20 @@ export async function deleteTemporaryAccessPass(
   client: GraphClient,
   userId: string,
   methodId?: string,
+  policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ userId: string; deleted: string[] }> {
+  assertTapAllowed(policy);
   const path = tapMethodsPath(userId);
 
   if (methodId) {
-    await client.delete(`${path}/${encodeURIComponent(methodId)}`);
+    await client.delete(`${path}/${pathSegment(methodId, 'methodId')}`);
     return { userId, deleted: [methodId] };
   }
 
   const existing = await client.get<{ value?: GraphTapMethod[] }>(path);
   const ids = (existing.data?.value ?? []).map(method => method.id);
   for (const id of ids) {
-    await client.delete(`${path}/${encodeURIComponent(id)}`);
+    await client.delete(`${path}/${pathSegment(id, 'id')}`);
   }
   return { userId, deleted: ids };
 }
@@ -550,6 +576,12 @@ export async function pimSelfActivateRole(
     principalId,
     duration,
   };
+}
+
+function assertTapAllowed(policy: ProtectionPolicy): void {
+  if (!policy.allowTap) {
+    throw new ProtectedTargetError('Temporary Access Pass management is disabled. Set MS_ENABLE_TAP=true (in addition to MS_ENABLE_WRITES=true) to allow it.');
+  }
 }
 
 function isAlreadyMemberError(error: unknown): boolean {
