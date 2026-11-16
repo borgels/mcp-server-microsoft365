@@ -1,6 +1,6 @@
 {
   "name": "mcp-server-microsoft365",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Policy-aware MCP server for Microsoft 365 / Microsoft Graph (Entra ID).",
   "type": "module",
   "main": "./dist/transports/stdio.js",
@@ -55,20 +55,22 @@
   },
   "homepage": "https://github.com/borgels/mcp-server-microsoft365#readme",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "zod": "^4.4.3"
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
   },
   "overrides": {
-    "ip-address": ">=10.1.1",
-    "hono": ">=4.12.16",
-    "fast-uri": ">=3.1.2",
-    "qs": ">=6.15.2"
+    "ip-address": "^10.1.1",
+    "hono": "^4.13.19",
+    "@hono/node-server": "^2.1.8",
+    "fast-uri": "^3.1.9",
+    "qs": "^6.17.1",
+    "body-parser": "^2.4.0"
   },
   "devDependencies": {
-    "@types/node": "^25.7.0",
+    "@types/node": "^25.9.9",
     "tsup": "^8.5.1",
-    "tsx": "^4.21.0",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.12"
   }
 }
