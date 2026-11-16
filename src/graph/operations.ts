@@ -558,7 +558,7 @@ export async function pimSelfActivateRole(
     principalId,
     roleDefinitionId: input.roleDefinitionId,
     directoryScopeId: input.directoryScopeId ?? '/',
-    justification: input.justification ?? 'borgels-mcp: just-in-time activation for an automated task',
+    justification: input.justification ?? 'mcp-server-microsoft365: just-in-time activation for an automated task',
     scheduleInfo: {
       startDateTime: new Date().toISOString(),
       expiration: { type: 'afterDuration', duration },

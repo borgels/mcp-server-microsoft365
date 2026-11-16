@@ -7,8 +7,9 @@ Graph allows it. Its focus is identity provisioning — create a user, assign a
 license, manage group membership — plus the supporting reads you need to do that
 safely.
 
-> **Disclaimer:** This is an independent, unofficial project by Borgels. Borgels
-> is not affiliated with, endorsed by, or supported by Microsoft. "Microsoft
+This is an independent, unofficial project. It is not developed, endorsed or supported by Microsoft.
+
+> **Disclaimer:** "Microsoft
 > 365", "Microsoft Graph", and "Entra ID" are referenced only to describe what
 > this server talks to. You need your own Entra ID app registration, and use of
 > Microsoft Graph is subject to Microsoft's own terms.
@@ -206,10 +207,43 @@ addressed by object id.
 npm run dev:http
 ```
 
-The HTTP transport binds to `127.0.0.1` by default and serves `POST /mcp`. Set
-`MCP_HTTP_TOKEN` to require bearer auth (compared in constant time), and `MCP_ALLOWED_ORIGINS` for
-browser-based local clients. `MCP_MAX_BODY_BYTES` defaults to `10485760`
-(10 MiB).
+The HTTP transport binds to `127.0.0.1` by default and serves `POST /mcp` and an
+unauthenticated `GET /healthz` (`{"status":"ok"}`).
+
+- `MCP_HTTP_TOKEN` requires `Authorization: Bearer <token>` on `/mcp` (compared in
+  constant time). It must be at least 32 printable ASCII characters, e.g.
+  `openssl rand -hex 32`.
+- The server **refuses to start** when it binds to a non-loopback address
+  (`MCP_HTTP_HOST`/`HOST`, e.g. `0.0.0.0` in a container) or has
+  `MCP_ALLOW_ANY_ORIGIN=true` without `MCP_HTTP_TOKEN`. Set
+  `MCP_HTTP_ALLOW_UNAUTHENTICATED=true` only if access is restricted by other means.
+- Failed authentication is counted per client address: after
+  `MCP_AUTH_FAILURE_LIMIT` failures (default `20`, `0` disables) within
+  `MCP_AUTH_FAILURE_WINDOW_MS` (default `60000`) further failures get `429` with
+  `Retry-After`. Requests with a valid token are never throttled.
+- On a loopback bind the `Host` header must be a localhost name or the bind address
+  (DNS-rebinding protection). `MCP_ALLOWED_HOSTS` (comma-separated host names, no
+  port) replaces that list and also enables the check on other binds.
+- `MCP_ALLOWED_ORIGINS` lists browser origins allowed besides localhost.
+- `MCP_MAX_BODY_BYTES` defaults to `10485760` (10 MiB).
+- `PORT`, `MCP_MAX_BODY_BYTES`, `MS_TIMEOUT_MS` and the boolean flags are validated
+  at startup; an invalid value stops the server with a message naming the variable.
+
+Microsoft Graph and token requests never follow HTTP redirects, so the bearer
+token and client secret are only sent to the configured hosts.
+
+## Security model
+
+- The server acts with **one shared Microsoft Graph identity**: the app
+  registration (or the delegated user / static token) configured in the
+  environment. Every MCP client that can call it gets that identity's access.
+- Per-user authorization belongs in an identity-aware gateway in front of the
+  server; `MCP_HTTP_TOKEN` authenticates the caller as a whole, not individual users.
+- Tool access is not data access: limiting the tool list (for example with
+  `MS_ENABLE_WRITES`) does not limit what the Graph identity may read or change.
+  Grant the app only the permissions it needs.
+- The HTTP server does not terminate TLS. Put it behind a TLS-terminating proxy
+  or keep it on a private network.
 
 ## Provisioning workflow
 
@@ -255,11 +289,11 @@ client-side) and:
 ## Rate limiting
 
 On HTTP 429, the raised `GraphHttpError` carries the `Retry-After` value and the
-Graph `request-id`. The Borgels connector layer uses these to retry.
+Graph `request-id`, so callers can retry.
 
-## Borgels gateway
+## Gateway export
 
-The `./gateway` subpath exports the Borgels gateway contract:
+The `./gateway` subpath exports a tool contract for embedding in another host:
 
 ```ts
 import { createMicrosoft365Gateway, microsoft365GatewayTools } from 'mcp-server-microsoft365/gateway';
@@ -269,7 +303,7 @@ const result = await gateway.callTool('list_subscribed_skus');
 ```
 
 `microsoft365GatewayTools` lists the same tool surface as the MCP server, with
-`riskLevel` and `enabledByDefault` so the gateway can gate writes. Read tools are
+`riskLevel` and `enabledByDefault` so the host can gate writes. Read tools are
 `enabledByDefault: true`; every write tool is `enabledByDefault: false`.
 
 ## Live smoke test

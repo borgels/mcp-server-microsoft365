@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formatUnknownError, GraphHttpError, redactSecrets } from '../src/errors.js';
-import { GraphClient } from '../src/graph/client.js';
+import { ConfigError } from '../src/config-env.js';
+import { GraphClient, graphEnvTimeoutMs } from '../src/graph/client.js';
 
 const originalEnv = { ...process.env };
 
@@ -96,5 +97,61 @@ describe('GraphClient', () => {
     expect(formatUnknownError(error)).not.toContain('super-secret');
     expect(redactSecrets('MS_CLIENT_SECRET=abc Authorization: Bearer xyz')).toContain('[REDACTED]');
     expect(redactSecrets('MS_CLIENT_SECRET=abc')).not.toContain('abc');
+  });
+
+  it('never follows redirects with credentials', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input).endsWith('/oauth2/v2.0/token')) {
+        expect(init?.redirect).toBe('manual');
+        return new Response(null, { status: 307, headers: { location: 'https://elsewhere.example/token' } });
+      }
+      expect(init?.redirect).toBe('manual');
+      return new Response(null, { status: 302, headers: { location: 'https://elsewhere.example/users' } });
+    });
+
+    const tokenClient = new GraphClient({
+      accessToken: 'static-token',
+      baseUrl: 'https://graph.example.test/v1.0',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    await expect(tokenClient.get('/users')).rejects.toThrow(/HTTP 302.*redirects are not followed/);
+
+    const secretClient = new GraphClient({
+      tenantId: 'tenant',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      baseUrl: 'https://graph.example.test/v1.0',
+      authorityHost: 'https://login.example.test',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    await expect(secretClient.get('/users')).rejects.toThrow(/HTTP 307/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('caps error bodies and redacts before truncating', async () => {
+    const body = `client_secret=${'s'.repeat(40)} ${'x'.repeat(200_000)}`;
+    const client = new GraphClient({
+      accessToken: 'static-token',
+      baseUrl: 'https://graph.example.test/v1.0',
+      fetchImpl: (async () => new Response(body, { status: 500, headers: { 'content-type': 'text/plain' } })) as typeof fetch,
+    });
+    const error = (await client.get('/users').then(
+      () => new Error('expected a rejection'),
+      (caught: unknown) => caught as Error,
+    ));
+    expect(error.message).toContain('[REDACTED]');
+    expect(error.message).not.toContain('sss');
+    expect(error.message).toContain('[truncated]');
+    expect(error.message.length).toBeLessThan(2_000);
+  });
+
+  it('validates MS_TIMEOUT_MS instead of producing NaN', () => {
+    expect(graphEnvTimeoutMs({})).toBe(30_000);
+    expect(graphEnvTimeoutMs({ MS_TIMEOUT_MS: '5000' })).toBe(5_000);
+    for (const value of ['abc', '30s', '0', '-1']) {
+      expect(() => graphEnvTimeoutMs({ MS_TIMEOUT_MS: value }), value).toThrow(ConfigError);
+    }
+    process.env.MS_TIMEOUT_MS = 'abc';
+    expect(() => new GraphClient({ accessToken: 'x' })).toThrow(/MS_TIMEOUT_MS/);
   });
 });
