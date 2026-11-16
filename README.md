@@ -224,7 +224,7 @@ unauthenticated `GET /healthz` (`{"status":"ok"}`).
 - On a loopback bind the `Host` header must be a localhost name or the bind address
   (DNS-rebinding protection). `MCP_ALLOWED_HOSTS` (comma-separated host names, no
   port) replaces that list and also enables the check on other binds.
-- `MCP_ALLOWED_ORIGINS` lists browser origins allowed besides localhost.
+- `MCP_ALLOWED_ORIGINS` (comma-separated, exact match) lists the browser origins allowed to call `/mcp`. When it is set it replaces the default, which allows only localhost origins.
 - `MCP_MAX_BODY_BYTES` defaults to `10485760` (10 MiB).
 - `PORT`, `MCP_MAX_BODY_BYTES`, `MS_TIMEOUT_MS` and the boolean flags are validated
   at startup; an invalid value stops the server with a message naming the variable.

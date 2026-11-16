@@ -8,9 +8,13 @@
   e.g. `0.0.0.0`) or with `MCP_ALLOW_ANY_ORIGIN=true` unless `MCP_HTTP_TOKEN` is set.
   `MCP_HTTP_ALLOW_UNAUTHENTICATED=true` restores the old behaviour explicitly.
 - `MCP_HTTP_TOKEN` must be at least 32 printable ASCII characters.
-- `PORT`, `MCP_MAX_BODY_BYTES`, `MS_TIMEOUT_MS`, `MCP_ALLOW_ANY_ORIGIN` and the other
-  numeric/boolean settings are validated at startup; invalid values stop the server
-  instead of being read as `NaN`.
+- These settings are validated at startup and an invalid value stops the server
+  instead of being read as `NaN` or ignored: integers `PORT` (1-65535),
+  `MCP_MAX_BODY_BYTES` (>= 1), `MS_TIMEOUT_MS` (1-600000),
+  `MCP_AUTH_FAILURE_LIMIT` (>= 0), `MCP_AUTH_FAILURE_WINDOW_MS` (>= 1); booleans
+  `MCP_ALLOW_ANY_ORIGIN` and `MCP_HTTP_ALLOW_UNAUTHENTICATED` (`true/false`, `1/0`,
+  `yes/no`, `on/off`); host names in `MCP_ALLOWED_HOSTS`. `MS_ENABLE_*` flags are
+  unchanged and still need exactly `true`.
 - The `Bearer` scheme in `Authorization` is now matched case-insensitively.
 
 ### Changes

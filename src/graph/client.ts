@@ -123,7 +123,7 @@ export class GraphClient {
    * A write against an object that was just created can still get
    * `404 Request_ResourceNotFound`: Entra replicates asynchronously, and a read
    * succeeding on one replica says nothing about the one the next call lands on.
-   * Seen on #78023 — create_user returned, a GET confirmed the account, and the
+   * Observed: create_user returned, a GET confirmed the account, and the
    * PATCH a second later still could not see it.
    *
    * So a WRITE that reports the resource missing is retried briefly. Reads and

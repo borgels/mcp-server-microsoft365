@@ -73,7 +73,7 @@ async function upnExists(client: GraphClient, userPrincipalName: string): Promis
  * Entra replicates a new directory object asynchronously: the POST returns an
  * id, and for a few seconds afterwards a write that addresses the same user by
  * UPN still gets `404 Request_ResourceNotFound`. Seen live one second after
- * creation, on `PUT /users/{upn}/manager/$ref` (#78020) — which aborted an
+ * creation, on `PUT /users/{upn}/manager/$ref`, which aborted an
  * onboarding that had only just started.
  *
  * The caller cannot reasonably be asked to sleep, and retrying every 404 would
@@ -364,8 +364,8 @@ export async function setManager(
 ): Promise<{ userId: string; managerId: string; managerObjectId: string }> {
   // /directoryObjects addresses an OBJECT ID and nothing else. The tool takes a
   // userRef like every other tool here, so a UPN arrives routinely and produced
-  // `400 Request_BadRequest: Invalid object identifier 'manager@example.com'`
-  // (#78020). Resolve it rather than making every caller remember.
+  // `400 Request_BadRequest: Invalid object identifier 'manager@example.com'`.
+  // Resolve it rather than making every caller remember.
   const managerObjectId = await resolveObjectId(client, managerId);
   await client.request({
     method: 'PUT',
