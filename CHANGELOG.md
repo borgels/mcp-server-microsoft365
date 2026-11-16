@@ -1,6 +1,38 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+### Upgrade notes
+
+- The HTTP server refuses to start on a non-loopback bind (`MCP_HTTP_HOST`/`HOST`,
+  e.g. `0.0.0.0`) or with `MCP_ALLOW_ANY_ORIGIN=true` unless `MCP_HTTP_TOKEN` is set.
+  `MCP_HTTP_ALLOW_UNAUTHENTICATED=true` restores the old behaviour explicitly.
+- `MCP_HTTP_TOKEN` must be at least 32 printable ASCII characters.
+- These settings are validated at startup and an invalid value stops the server
+  instead of being read as `NaN` or ignored: integers `PORT` (1-65535),
+  `MCP_MAX_BODY_BYTES` (>= 1), `MS_TIMEOUT_MS` (1-600000),
+  `MCP_AUTH_FAILURE_LIMIT` (>= 0), `MCP_AUTH_FAILURE_WINDOW_MS` (>= 1); booleans
+  `MCP_ALLOW_ANY_ORIGIN` and `MCP_HTTP_ALLOW_UNAUTHENTICATED` (`true/false`, `1/0`,
+  `yes/no`, `on/off`); host names in `MCP_ALLOWED_HOSTS`. `MS_ENABLE_*` flags are
+  unchanged and still need exactly `true`.
+- The `Bearer` scheme in `Authorization` is now matched case-insensitively.
+
+### Changes
+
+- HTTP transport: failed-authentication limiting per client address (`429` with
+  `Retry-After`; new `MCP_AUTH_FAILURE_LIMIT`, `MCP_AUTH_FAILURE_WINDOW_MS`), `Host`
+  header check on loopback binds (new `MCP_ALLOWED_HOSTS`), `401` with
+  `WWW-Authenticate`, `400` for invalid JSON, `413` before reading an oversized body,
+  `GET /healthz`, graceful shutdown on `SIGTERM`/`SIGINT`.
+- Microsoft Graph and token requests no longer follow redirects, so the bearer token
+  and client secret cannot be forwarded to another host.
+- Upstream error bodies are read up to 64 KB; error text is redacted before it is
+  truncated.
+- The default PIM activation justification names this server.
+- Docker image is published only after CI passes, with SBOM and provenance; GitHub
+  Actions are pinned to commit SHAs; dependency updates.
+
+### Earlier unreleased changes
 
 - Password reset and Temporary Access Pass require their own opt-in flags
   (`MS_ENABLE_PASSWORD_RESET`, `MS_ENABLE_TAP`) in addition to `MS_ENABLE_WRITES`.
@@ -27,4 +59,4 @@
   membership, and usage location, disabled by default.
 - Added friendly license-name resolution against subscribed SKUs with
   availability checks.
-- Added the `./gateway` export consumed by the Borgels gateway.
+- Added the `./gateway` export for embedding the tools in another host.

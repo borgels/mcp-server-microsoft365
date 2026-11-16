@@ -1,9 +1,18 @@
+import { type Env, readEnvInteger } from '../config-env.js';
 import { GraphHttpError } from '../errors.js';
 import { pathSegment } from './path.js';
 
 export const GRAPH_DEFAULT_BASE_URL = 'https://graph.microsoft.com/v1.0';
 export const GRAPH_DEFAULT_AUTHORITY_HOST = 'https://login.microsoftonline.com';
 export const GRAPH_DEFAULT_SCOPE = 'https://graph.microsoft.com/.default';
+export const GRAPH_DEFAULT_TIMEOUT_MS = 30_000;
+/** Error bodies are read up to this many bytes. */
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
+
+/** MS_TIMEOUT_MS, validated (1 ms to 10 minutes); throws ConfigError on invalid values. */
+export function graphEnvTimeoutMs(env: Env = process.env): number {
+  return readEnvInteger('MS_TIMEOUT_MS', GRAPH_DEFAULT_TIMEOUT_MS, { min: 1, max: 600_000 }, env);
+}
 
 export type GraphHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 export type GraphQueryValue = string | number | boolean | null | undefined | Array<string | number | boolean>;
@@ -79,7 +88,7 @@ export class GraphClient {
     );
     this.scope = options.scope ?? process.env.MS_GRAPH_SCOPE ?? GRAPH_DEFAULT_SCOPE;
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.timeoutMs = options.timeoutMs ?? Number(process.env.MS_TIMEOUT_MS ?? 30_000);
+    this.timeoutMs = options.timeoutMs ?? graphEnvTimeoutMs();
   }
 
   async get<T = unknown>(path: string, query?: Record<string, GraphQueryValue>): Promise<GraphResponse<T>> {
@@ -114,7 +123,7 @@ export class GraphClient {
    * A write against an object that was just created can still get
    * `404 Request_ResourceNotFound`: Entra replicates asynchronously, and a read
    * succeeding on one replica says nothing about the one the next call lands on.
-   * Seen on #78023 — create_user returned, a GET confirmed the account, and the
+   * Observed: create_user returned, a GET confirmed the account, and the
    * PATCH a second later still could not see it.
    *
    * So a WRITE that reports the resource missing is retried briefly. Reads and
@@ -156,10 +165,13 @@ export class GraphClient {
       method: request.method,
       headers,
       body: request.body === undefined ? undefined : JSON.stringify(request.body),
+      // Never follow redirects: they would carry the bearer token or client secret elsewhere.
+      redirect: 'manual',
       signal: AbortSignal.timeout(this.timeoutMs),
     });
 
-    const responseBody = await readResponseBody(response);
+    assertNotRedirect(response, request.method, url);
+    const responseBody = response.ok ? await readResponseBody(response) : await readErrorBody(response);
 
     if (!response.ok) {
       throw new GraphHttpError({
@@ -248,10 +260,13 @@ export class GraphClient {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: body.toString(),
+      // Never follow redirects: they would carry the bearer token or client secret elsewhere.
+      redirect: 'manual',
       signal: AbortSignal.timeout(this.timeoutMs),
     });
 
-    const responseBody = await readResponseBody(response);
+    assertNotRedirect(response, 'POST', url);
+    const responseBody = response.ok ? await readResponseBody(response) : await readErrorBody(response);
     if (!response.ok) {
       throw new GraphHttpError({
         status: response.status,
@@ -305,10 +320,13 @@ export class GraphClient {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: body.toString(),
+      // Never follow redirects: they would carry the bearer token or client secret elsewhere.
+      redirect: 'manual',
       signal: AbortSignal.timeout(this.timeoutMs),
     });
 
-    const responseBody = await readResponseBody(response);
+    assertNotRedirect(response, 'POST', url);
+    const responseBody = response.ok ? await readResponseBody(response) : await readErrorBody(response);
     if (!response.ok) {
       throw new GraphHttpError({
         status: response.status,
@@ -376,6 +394,70 @@ async function readResponseBody(response: Response): Promise<unknown> {
   } catch {
     return text;
   }
+}
+
+/**
+ * Error bodies are read up to MAX_ERROR_BODY_BYTES; JSON is parsed only when
+ * complete, otherwise the (redacted, truncated) text is reported.
+ */
+async function readErrorBody(response: Response): Promise<unknown> {
+  const { text, exceeded } = await readTextUpTo(response, MAX_ERROR_BODY_BYTES);
+  if (!text) {
+    return null;
+  }
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!exceeded && contentType.includes('application/json')) {
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      return text;
+    }
+  }
+  return text;
+}
+
+async function readTextUpTo(response: Response, limit: number): Promise<{ text: string; exceeded: boolean }> {
+  if (!response.body) {
+    return { text: '', exceeded: false };
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let exceeded = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (total + value.byteLength > limit) {
+      chunks.push(value.subarray(0, limit - total));
+      total = limit;
+      exceeded = true;
+      await reader.cancel().catch(() => undefined);
+      break;
+    }
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  return { text: Buffer.concat(chunks).toString('utf8'), exceeded };
+}
+
+function isRedirect(status: number): boolean {
+  return status >= 300 && status < 400 && status !== 304;
+}
+
+/** Redirects are not followed (see `redirect: 'manual'`); report them as an error. */
+function assertNotRedirect(response: Response, method: string, url: string): void {
+  if (!isRedirect(response.status)) {
+    return;
+  }
+  void response.body?.cancel().catch(() => undefined);
+  throw new GraphHttpError({
+    status: response.status,
+    method,
+    url,
+    fallbackMessage: 'Microsoft Graph responded with a redirect; redirects are not followed.',
+  });
 }
 
 function extractNextLink(body: unknown): string | undefined {

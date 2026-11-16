@@ -8,6 +8,9 @@ export interface GraphHttpErrorInput {
   fallbackMessage?: string;
 }
 
+/** Upstream error text included in a message is cut to this length (after redaction). */
+export const MAX_ERROR_TEXT = 500;
+
 const SECRET_PATTERNS = [
   /Authorization:\s*(Bearer|Basic)\s+[^,\s}]+/gi,
   /(MS_TENANT_ID|MS_CLIENT_ID|MS_CLIENT_SECRET|MS_ACCESS_TOKEN|client_secret|clientSecret|access_token|refresh_token|apiKey|accessToken|token)["']?\s*[:=]\s*["']?[^"',\s}]+/gi,
@@ -69,11 +72,20 @@ function formatGraphHttpError(input: GraphHttpErrorInput): string {
     `${input.method.toUpperCase()} ${redactSecrets(input.url)}`,
     input.requestId ? `request-id=${input.requestId}` : undefined,
     input.retryAfter ? `retry-after=${input.retryAfter}s` : undefined,
-    graphErrorText(input.payload),
-    input.fallbackMessage,
+    truncateRedacted(graphErrorText(input.payload)),
+    truncateRedacted(input.fallbackMessage),
   ].filter(Boolean);
 
   return redactSecrets(parts.join(' | '));
+}
+
+/** Redacts first, then truncates, so a cut can never expose part of a secret. */
+function truncateRedacted(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  const redacted = redactSecrets(value);
+  return redacted.length > MAX_ERROR_TEXT ? `${redacted.slice(0, MAX_ERROR_TEXT)}... [truncated]` : redacted;
 }
 
 function graphErrorText(payload: unknown): string | undefined {

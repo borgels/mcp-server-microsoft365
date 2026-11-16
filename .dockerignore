@@ -1,5 +1,11 @@
+.git
+.github
+.claude
 node_modules
 dist
-.env
-.git
 coverage
+test
+*.log
+.env
+.env.*
+!.env.example

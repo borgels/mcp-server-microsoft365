@@ -93,7 +93,7 @@ describe('Microsoft 365 gateway export', () => {
 
   it('creates a user with a generated temporary password after an existence check', async () => {
     // The existence check before the POST must 404; the replication wait after
-    // it must eventually succeed, exactly as Entra behaves (#78020).
+    // it must eventually succeed, exactly as Entra behaves.
     let created = false;
     const { gateway, requests } = makeGateway(req => {
       const url = new URL(req.url);
@@ -235,7 +235,7 @@ describe('Microsoft 365 gateway export', () => {
     expect(body['@odata.id']).toContain(`/directoryObjects/${id}`);
   });
 
-  it('resolves a manager given by UPN to an object id first (#78020)', async () => {
+  it('resolves a manager given by UPN to an object id first', async () => {
     // /directoryObjects addresses an object id and nothing else; a UPN produced
     // 400 Request_BadRequest: Invalid object identifier 'manager@example.com'.
     const id = '99999999-8888-7777-6666-555555555555';
@@ -380,7 +380,7 @@ describe('password reset', () => {
 });
 
 describe('replication lag on writes', () => {
-  it('retries a PATCH that cannot see a just-created user, but not a GET (#78023)', async () => {
+  it('retries a PATCH that cannot see a just-created user, but not a GET', async () => {
     let patches = 0;
     let gets = 0;
     const missing = () =>

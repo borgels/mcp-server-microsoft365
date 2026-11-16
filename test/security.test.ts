@@ -215,11 +215,13 @@ describe('Graph client hardening', () => {
 
 describe('HTTP bearer token check', () => {
   const req = (authorization?: string) => ({ headers: { authorization } }) as unknown as IncomingMessage;
-  const config = { host: '127.0.0.1', port: 0, maxBodyBytes: 1, httpToken: 'secret-token' };
+  const token = 'secret-token-0123456789abcdef0123456789';
+  const config = { host: '127.0.0.1', port: 0, maxBodyBytes: 1, httpToken: token };
 
   it('accepts the exact token and rejects anything else', () => {
-    expect(() => assertAuthorized(req('Bearer secret-token'), config)).not.toThrow();
-    for (const bad of [undefined, '', 'Bearer secret-toke', 'Bearer secret-token2', 'bearer secret-token', 'secret-token']) {
+    expect(() => assertAuthorized(req(`Bearer ${token}`), config)).not.toThrow();
+    expect(() => assertAuthorized(req(`bearer ${token}`), config)).not.toThrow();
+    for (const bad of [undefined, '', `Bearer ${token.slice(0, -1)}`, `Bearer ${token}2`, `Basic ${token}`, token]) {
       expect(() => assertAuthorized(req(bad), config)).toThrow(/Unauthorized/);
     }
   });
