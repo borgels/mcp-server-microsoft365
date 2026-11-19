@@ -1,4 +1,13 @@
-import { GraphClient, type GraphClientOptions, type GraphQueryValue } from './graph/client.js';
+import {
+  GRAPH_DEFAULT_AUTHORITY_HOST,
+  GRAPH_DEFAULT_BASE_URL,
+  GRAPH_DEFAULT_SCOPE,
+  GRAPH_DEFAULT_TIMEOUT_MS,
+  GraphClient,
+  type GraphClientOptions,
+  type GraphQueryValue,
+} from './graph/client.js';
+import { GraphHttpError } from './errors.js';
 import {
   addGroupMember,
   assignLicense,
@@ -16,7 +25,7 @@ import {
   type UpdateUserInput,
 } from './graph/operations.js';
 import { pathSegment } from './graph/path.js';
-import { protectionPolicyFromEnv, type ProtectionPolicy } from './graph/protection.js';
+import { ProtectedTargetError, protectionPolicyFromEnv, type ProtectionPolicy } from './graph/protection.js';
 
 export type GatewayRiskLevel = 'read' | 'write' | 'destructive';
 export type GatewayJsonValue = string | number | boolean | null | GatewayJsonValue[] | { [key: string]: GatewayJsonValue };
@@ -45,6 +54,55 @@ export interface Microsoft365GatewayOptions extends GraphClientOptions {
    * unless explicitly enabled.
    */
   protection?: Partial<ProtectionPolicy>;
+  /**
+   * Instance policy from the embedding host. When given, the instance is in
+   * host mode: it reads nothing from the environment (no MS_* variable, not
+   * even for the protection policy, which then defaults to everything refused),
+   * it needs `accessToken` (the host fetches the access for its tenant), write
+   * tools are refused unless `enableWrites` is true, and `disabledTools` are
+   * left out of `tools` and refused. Errors are fixed texts that carry only the
+   * Graph HTTP status, never Graph's own text. A host serving several tenants
+   * should always pass it.
+   */
+  policy?: Microsoft365InstancePolicy;
+}
+
+/** Policy given by an embedding host for one gateway instance. */
+export interface Microsoft365InstancePolicy {
+  /** Allow write and destructive tools. Default false. */
+  enableWrites?: boolean;
+  /** Tools turned off on this instance. Must name gateway tools. */
+  disabledTools?: readonly string[];
+}
+
+export class GatewayConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GatewayConfigError';
+  }
+}
+
+/** One Microsoft Graph request a tool may make: the method and the path, with `{...}` for a value from the input. */
+export interface GatewayUpstreamOperation {
+  readonly method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
+  readonly path: string;
+}
+
+/** A tool catalog entry: the gateway definition plus the Graph requests the tool may make. */
+export interface GatewayToolCatalogEntry {
+  readonly name: string;
+  readonly title: string;
+  readonly description: string;
+  readonly riskLevel: GatewayRiskLevel;
+  readonly enabledByDefault: boolean;
+  readonly inputSchema: { readonly [key: string]: unknown };
+  readonly upstream: readonly GatewayUpstreamOperation[];
+  /**
+   * True when the tool can read more than its name says (anything in the
+   * directory, chosen by the input). No gateway tool is broad: every read
+   * names what it reads (users, groups, licences).
+   */
+  readonly broad: boolean;
 }
 
 const userRef = { type: 'string', description: 'User object id (GUID) or userPrincipalName.' } satisfies GatewayJsonObject;
@@ -340,12 +398,199 @@ export const microsoft365GatewayTools: GatewayToolDefinition[] = [
   },
 ];
 
+const GUARD_LOOKUPS: readonly GatewayUpstreamOperation[] = [
+  { method: 'GET', path: '/users/{user}' },
+  { method: 'GET', path: '/users/{user}/transitiveMemberOf' },
+  { method: 'GET', path: '/roleManagement/directory/roleAssignments' },
+  { method: 'GET', path: '/groups/{group}' },
+];
+
+/** The Graph requests each gateway tool may make (the guard's directory lookups included where it runs). */
+const UPSTREAM: Readonly<Record<string, readonly GatewayUpstreamOperation[]>> = {
+  get_user: [{ method: 'GET', path: '/users/{user}' }],
+  list_users: [{ method: 'GET', path: '/users' }],
+  list_subscribed_skus: [{ method: 'GET', path: '/subscribedSkus' }],
+  list_groups: [{ method: 'GET', path: '/groups' }],
+  get_group: [{ method: 'GET', path: '/groups/{group}' }],
+  list_group_members: [{ method: 'GET', path: '/groups/{group}/members' }],
+  get_user_license_details: [{ method: 'GET', path: '/users/{user}/licenseDetails' }],
+  create_user: [
+    { method: 'GET', path: '/users/{user}' },
+    { method: 'POST', path: '/users' },
+    { method: 'PATCH', path: '/users/{user}' },
+  ],
+  assign_license: [
+    { method: 'GET', path: '/subscribedSkus' },
+    { method: 'GET', path: '/users/{user}' },
+    { method: 'PATCH', path: '/users/{user}' },
+    { method: 'POST', path: '/users/{user}/assignLicense' },
+  ],
+  remove_license: [
+    { method: 'GET', path: '/subscribedSkus' },
+    { method: 'POST', path: '/users/{user}/assignLicense' },
+  ],
+  add_group_member: [...GUARD_LOOKUPS, { method: 'POST', path: '/groups/{group}/members/$ref' }],
+  remove_group_member: [...GUARD_LOOKUPS, { method: 'DELETE', path: '/groups/{group}/members/{user}/$ref' }],
+  set_usage_location: [{ method: 'PATCH', path: '/users/{user}' }],
+  update_user: [{ method: 'PATCH', path: '/users/{user}' }],
+  reset_password: [...GUARD_LOOKUPS, { method: 'PATCH', path: '/users/{user}' }],
+  set_manager: [{ method: 'PUT', path: '/users/{user}/manager/$ref' }],
+  create_temporary_access_pass: [
+    ...GUARD_LOOKUPS,
+    { method: 'POST', path: '/users/{user}/authentication/temporaryAccessPassMethods' },
+    { method: 'DELETE', path: '/users/{user}/authentication/temporaryAccessPassMethods/{method}' },
+  ],
+  delete_temporary_access_pass: [
+    ...GUARD_LOOKUPS,
+    { method: 'GET', path: '/users/{user}/authentication/temporaryAccessPassMethods' },
+    { method: 'DELETE', path: '/users/{user}/authentication/temporaryAccessPassMethods/{method}' },
+  ],
+  activate_pim_role: [
+    { method: 'GET', path: '/me' },
+    { method: 'POST', path: '/roleManagement/directory/roleAssignmentScheduleRequests' },
+  ],
+};
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object') {
+    for (const entry of Object.values(value as Record<string, unknown>)) deepFreeze(entry);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+/**
+ * The tool catalog: every gateway tool with its definition, the Graph
+ * requests it may make and the broad mark, deeply frozen. Hosts can build
+ * their own permission model from it without creating an instance.
+ */
+export const microsoft365ToolCatalog: readonly GatewayToolCatalogEntry[] = deepFreeze(
+  microsoft365GatewayTools.map(tool => {
+    const upstream = UPSTREAM[tool.name];
+    if (!upstream) throw new Error(`No upstream list for the gateway tool ${tool.name}`);
+    return {
+      ...structuredClone(tool),
+      upstream: upstream.map(operation => ({ ...operation })),
+      broad: false,
+    };
+  }),
+);
+
+const TOOL_NAMES: ReadonlySet<string> = new Set(microsoft365GatewayTools.map(tool => tool.name));
+
+/**
+ * Create one gateway instance. With `policy` it is in host mode (see
+ * Microsoft365GatewayOptions.policy); without, it reads the environment as
+ * the MCP server does.
+ */
 export function createMicrosoft365Gateway(options: Microsoft365GatewayOptions = {}) {
-  const { protection, ...clientOptions } = options;
+  if (options.policy !== undefined) return createHostGateway(options, options.policy);
+  return createEnvGateway(options);
+}
+
+/** A bearer token as the host gives it: printable ASCII without spaces, of a sensible length. */
+const BEARER = /^[\x21-\x7e]{16,16384}$/;
+
+function createHostGateway(options: Microsoft365GatewayOptions, hostPolicy: Microsoft365InstancePolicy) {
+  const accessToken: unknown = options.accessToken;
+  if (typeof accessToken !== 'string' || !BEARER.test(accessToken)) {
+    throw new GatewayConfigError(
+      'A host-mode Microsoft 365 gateway requires options.accessToken. Host-mode instances read nothing from the environment.',
+    );
+  }
+  const disabled = new Set<string>();
+  for (const name of hostPolicy.disabledTools ?? []) {
+    if (!TOOL_NAMES.has(name)) throw new GatewayConfigError(`policy.disabledTools names no gateway tool: ${String(name).slice(0, 100)}`);
+    disabled.add(name);
+  }
+  const enableWrites = hostPolicy.enableWrites === true;
+  // Every client option explicit: `??` in GraphClient falls back to the environment only on undefined.
+  const inner = createEnvGateway(
+    {
+      tenantId: '',
+      clientId: '',
+      clientSecret: '',
+      refreshToken: '',
+      accessToken,
+      baseUrl: options.baseUrl ?? GRAPH_DEFAULT_BASE_URL,
+      authorityHost: GRAPH_DEFAULT_AUTHORITY_HOST,
+      scope: GRAPH_DEFAULT_SCOPE,
+      timeoutMs: options.timeoutMs ?? GRAPH_DEFAULT_TIMEOUT_MS,
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    },
+    {
+      allowPasswordReset: false,
+      allowTap: false,
+      protectedUsers: [],
+      protectedGroups: [],
+      ...definedOnly(options.protection ?? {}),
+    },
+  );
+  const offered = (tool: GatewayToolDefinition) => !disabled.has(tool.name) && (tool.riskLevel === 'read' || enableWrites);
+  const tools = microsoft365GatewayTools.filter(offered);
+  const byName = new Map(tools.map(tool => [tool.name, tool]));
+
+  return {
+    tools,
+    async callTool(toolName: string, input: GatewayJsonObject = {}): Promise<GatewayToolResult> {
+      const tool = typeof toolName === 'string' ? byName.get(toolName) : undefined;
+      if (!tool) return errorResult('Refused: the tool is not offered on this instance.');
+      const invalid = invalidInput(tool, input);
+      if (invalid) return errorResult(`Invalid input for ${tool.name}: ${invalid}`);
+      try {
+        return withoutToken(await inner.callTool(tool.name, input), accessToken);
+      } catch (error) {
+        if (error instanceof GraphHttpError) return errorResult(`Microsoft Graph request failed with HTTP ${error.status}`);
+        if (error instanceof ProtectedTargetError) return errorResult('Refused: the target is protected.');
+        return errorResult('The Microsoft 365 call could not be completed.');
+      }
+    },
+  };
+}
+
+function definedOnly(value: Partial<ProtectionPolicy>): Partial<ProtectionPolicy> {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as Partial<ProtectionPolicy>;
+}
+
+/** Checks the input against the tool's schema: an object, known fields only, required fields present, types. */
+function invalidInput(tool: GatewayToolDefinition, input: unknown): string | undefined {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return 'expected an object';
+  const properties = (tool.inputSchema.properties ?? {}) as Record<string, { type?: string }>;
+  for (const [key, value] of Object.entries(input)) {
+    const schema = Object.prototype.hasOwnProperty.call(properties, key) ? properties[key] : undefined;
+    if (!schema) return `unknown field ${key.slice(0, 50)}`;
+    const type = schema.type;
+    const ok =
+      type === 'string'
+        ? typeof value === 'string'
+        : type === 'number'
+          ? typeof value === 'number' && Number.isFinite(value)
+          : type === 'boolean'
+            ? typeof value === 'boolean'
+            : type === 'array'
+              ? Array.isArray(value) && value.every(item => typeof item === 'string')
+              : true;
+    if (!ok) return `${key} must be a ${String(type)}`;
+  }
+  for (const key of (tool.inputSchema.required ?? []) as string[]) {
+    if (!Object.prototype.hasOwnProperty.call(input, key)) return `missing ${key}`;
+  }
+  return undefined;
+}
+
+/** A result that holds the instance's token anywhere (it never should) is withheld whole. */
+function withoutToken(result: GatewayToolResult, token: string): GatewayToolResult {
+  return JSON.stringify(result).includes(token) ? errorResult('The answer was withheld.') : result;
+}
+
+function createEnvGateway(options: Microsoft365GatewayOptions, fixedProtection?: ProtectionPolicy) {
+  const { protection, policy: _policy, ...clientOptions } = options;
   const client = new GraphClient(clientOptions);
-  const policy: ProtectionPolicy = { ...protectionPolicyFromEnv() };
-  for (const [key, value] of Object.entries(protection ?? {})) {
-    if (value !== undefined) (policy as unknown as Record<string, unknown>)[key] = value;
+  const policy: ProtectionPolicy = fixedProtection ?? { ...protectionPolicyFromEnv() };
+  if (!fixedProtection) {
+    for (const [key, value] of Object.entries(protection ?? {})) {
+      if (value !== undefined) (policy as unknown as Record<string, unknown>)[key] = value;
+    }
   }
 
   return {

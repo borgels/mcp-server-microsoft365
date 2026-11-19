@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0
+
+### Changes
+
+- `./gateway`: host mode. `createMicrosoft365Gateway({ accessToken, policy })`
+  with `policy: { enableWrites?, disabledTools? }` reads nothing from the
+  environment: Graph at its own address, the host's access token (the host
+  fetches it for the tenant, for example with a certificate), and the
+  protection policy only from `protection`, otherwise everything refused.
+  Write tools are refused unless `enableWrites` is true; disabled tools are
+  left out of `tools`. Input is checked against the tool's schema (known
+  fields, required fields, types) before any request. Errors are fixed texts
+  with only the Graph HTTP status, and a result that holds the token is
+  withheld. Without `policy` the gateway behaves as before.
+- `./gateway`: `microsoft365ToolCatalog`, a deeply frozen catalog of every
+  gateway tool with the Graph requests it may make (`upstream`) and the
+  `broad` mark (false for all).
+
 ## 0.2.0
 
 ### Upgrade notes
