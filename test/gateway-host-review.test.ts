@@ -84,10 +84,29 @@ describe('tools Graph does not support with an app-only token', () => {
 
 describe('the catalog lists every request a tool makes', () => {
   /** Answers every request plausibly: an ordinary, unprivileged directory with one SKU and one TAP. */
+  /** Whether create_user's POST has run: the new user exists from then on (its replication wait finds it). */
+  let createdNew = false;
+
   function directory(req: Request): Response {
     const url = new URL(req.url);
     const path = url.pathname.replace(/^\/v1\.0/, '');
-    if (req.method !== 'GET') return new Response(null, { status: 204 });
+    // Writes answer as Microsoft Graph documents them.
+    if (req.method === 'POST' && path === '/users') {
+      createdNew = true;
+      return Response.json({ id: USER_ID, userPrincipalName: 'new@example.com', displayName: 'Ny Bruger' }, { status: 201 });
+    }
+    if (req.method === 'POST' && path.endsWith('/assignLicense')) {
+      return Response.json({ id: USER_ID, userPrincipalName: 'x@example.com', assignedLicenses: [] });
+    }
+    if (req.method === 'POST' && path.endsWith('/temporaryAccessPassMethods')) {
+      return Response.json({ id: 'tap-2', temporaryAccessPass: 'x', lifetimeInMinutes: 60, isUsableOnce: false }, { status: 201 });
+    }
+    if (req.method === 'POST' && path === '/roleManagement/directory/roleAssignmentScheduleRequests') {
+      return Response.json({ id: 'req-1', status: 'Provisioned', action: 'selfActivate' }, { status: 201 });
+    }
+    if (req.method === 'POST' || req.method === 'PATCH' || req.method === 'PUT' || req.method === 'DELETE') {
+      return new Response(null, { status: 204 });
+    }
     if (path === '/subscribedSkus') return Response.json({ value: [{ skuId: '00000000-0000-4000-8000-000000000001', skuPartNumber: 'ENTERPRISEPACK', prepaidUnits: { enabled: 5 }, consumedUnits: 1 }] });
     if (path.endsWith('/transitiveMemberOf') || path === '/roleManagement/directory/roleAssignments') return Response.json({ value: [] });
     if (path.endsWith('/temporaryAccessPassMethods')) return Response.json({ value: [{ id: 'tap-1' }] });
@@ -96,7 +115,7 @@ describe('the catalog lists every request a tool makes', () => {
     if (path.startsWith('/users/') && url.searchParams.get('$select')?.includes('usageLocation')) return Response.json({ id: USER_ID, usageLocation: 'DK' });
     if (path.startsWith('/users/')) {
       // A user that does not exist yet answers 404 to create_user's check; everyone else exists.
-      if (decodeURIComponent(path).includes('new@')) return Response.json({ error: { code: 'Request_ResourceNotFound' } }, { status: 404 });
+      if (decodeURIComponent(path).includes('new@') && !createdNew) return Response.json({ error: { code: 'Request_ResourceNotFound' } }, { status: 404 });
       return Response.json({ id: USER_ID, userPrincipalName: 'x@example.com', usageLocation: 'DK', value: [] });
     }
     return Response.json({ value: [] });
@@ -134,6 +153,7 @@ describe('the catalog lists every request a tool makes', () => {
     it(`${entry.name}: every recorded request is in its upstream list`, async () => {
       // The env gateway with every guard open, so each tool runs its whole path.
       const requests: Request[] = [];
+      createdNew = false;
       const gateway = createMicrosoft365Gateway({
         accessToken: TOKEN,
         tenantId: '',
@@ -148,7 +168,9 @@ describe('the catalog lists every request a tool makes', () => {
           return directory(req);
         },
       });
-      await gateway.callTool(entry.name, inputs[entry.name] as never).catch(() => undefined);
+      // The whole path must run: a failure would hide requests the catalog does not list.
+      const result = await gateway.callTool(entry.name, inputs[entry.name] as never);
+      expect(result.isError, `${entry.name}: ${JSON.stringify(result.content)}`).toBeFalsy();
       expect(requests.length, entry.name).toBeGreaterThan(0);
       for (const req of requests) {
         const path = new URL(req.url).pathname.replace(/^\/v1\.0/, '');
@@ -157,4 +179,15 @@ describe('the catalog lists every request a tool makes', () => {
       }
     });
   }
+});
+
+describe('the catalog states no request a tool never makes', () => {
+  it('lists no group lookup for password reset or temporary access passes, and no PATCH for create_user', () => {
+    const paths = (name: string) => microsoft365ToolCatalog.find(e => e.name === name)!.upstream.map(op => `${op.method} ${op.path}`);
+    for (const name of ['reset_password', 'create_temporary_access_pass', 'delete_temporary_access_pass']) {
+      expect(paths(name), name).not.toContain('GET /groups/{group}');
+    }
+    expect(paths('create_user')).toEqual(['GET /users/{user}', 'POST /users']);
+    expect(paths('add_group_member')).toContain('GET /groups/{group}');
+  });
 });

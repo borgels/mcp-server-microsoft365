@@ -398,12 +398,15 @@ export const microsoft365GatewayTools: GatewayToolDefinition[] = [
   },
 ];
 
-const GUARD_LOOKUPS: readonly GatewayUpstreamOperation[] = [
+/** The protection guard's lookups for a user (assertUserNotPrivileged). */
+const USER_GUARD_LOOKUPS: readonly GatewayUpstreamOperation[] = [
   { method: 'GET', path: '/users/{user}' },
   { method: 'GET', path: '/users/{user}/transitiveMemberOf' },
   { method: 'GET', path: '/roleManagement/directory/roleAssignments' },
-  { method: 'GET', path: '/groups/{group}' },
 ];
+
+/** The guard's lookups for a group membership change: the group (assertGroupNotProtected) and the user. */
+const GROUP_GUARD_LOOKUPS: readonly GatewayUpstreamOperation[] = [{ method: 'GET', path: '/groups/{group}' }, ...USER_GUARD_LOOKUPS];
 
 /** The Graph requests each gateway tool may make (the guard's directory lookups included where it runs). */
 const UPSTREAM: Readonly<Record<string, readonly GatewayUpstreamOperation[]>> = {
@@ -417,7 +420,6 @@ const UPSTREAM: Readonly<Record<string, readonly GatewayUpstreamOperation[]>> = 
   create_user: [
     { method: 'GET', path: '/users/{user}' },
     { method: 'POST', path: '/users' },
-    { method: 'PATCH', path: '/users/{user}' },
   ],
   assign_license: [
     { method: 'GET', path: '/subscribedSkus' },
@@ -429,17 +431,17 @@ const UPSTREAM: Readonly<Record<string, readonly GatewayUpstreamOperation[]>> = 
     { method: 'GET', path: '/subscribedSkus' },
     { method: 'POST', path: '/users/{user}/assignLicense' },
   ],
-  add_group_member: [...GUARD_LOOKUPS, { method: 'POST', path: '/groups/{group}/members/$ref' }],
-  remove_group_member: [...GUARD_LOOKUPS, { method: 'DELETE', path: '/groups/{group}/members/{user}/$ref' }],
+  add_group_member: [...GROUP_GUARD_LOOKUPS, { method: 'POST', path: '/groups/{group}/members/$ref' }],
+  remove_group_member: [...GROUP_GUARD_LOOKUPS, { method: 'DELETE', path: '/groups/{group}/members/{user}/$ref' }],
   set_usage_location: [{ method: 'PATCH', path: '/users/{user}' }],
   update_user: [{ method: 'PATCH', path: '/users/{user}' }],
-  reset_password: [...GUARD_LOOKUPS, { method: 'PATCH', path: '/users/{user}' }],
+  reset_password: [...USER_GUARD_LOOKUPS, { method: 'PATCH', path: '/users/{user}' }],
   set_manager: [
     { method: 'GET', path: '/users/{manager}' },
     { method: 'PUT', path: '/users/{user}/manager/$ref' },
   ],
   create_temporary_access_pass: [
-    ...GUARD_LOOKUPS,
+    ...USER_GUARD_LOOKUPS,
     { method: 'POST', path: '/users/{user}/authentication/temporaryAccessPassMethods' },
     { method: 'DELETE', path: '/users/{user}/authentication/temporaryAccessPassMethods/{method}' },
   ],

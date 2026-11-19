@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `microsoft365ToolCatalog`: `create_user` lists no PATCH, and password
+  reset and temporary access passes list no group lookup (they do neither).
+  The catalog test runs every tool to success against realistic Graph
+  answers, so a failure can no longer hide a request.
+- `package-lock.json`: the root package's version is 0.3.0.
+
 ## 0.3.0
 
 ### Changes
