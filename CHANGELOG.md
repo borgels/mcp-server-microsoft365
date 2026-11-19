@@ -16,7 +16,13 @@
   withheld. Without `policy` the gateway behaves as before.
 - `./gateway`: `microsoft365ToolCatalog`, a deeply frozen catalog of every
   gateway tool with the Graph requests it may make (`upstream`) and the
-  `broad` mark (false for all).
+  `broad` mark (false for all), held by a test against the requests each tool
+  makes.
+- Host mode sends the token to `https://graph.microsoft.com/v1.0` only;
+  another `baseUrl` is refused. Validation errors are fixed texts (no field
+  names or values) and enforce the schema's minimum and maximum.
+  `get_user_license_details` is not offered in host mode: Graph does not
+  support application permissions for it.
 
 ## 0.2.0
 

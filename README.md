@@ -306,6 +306,42 @@ const result = await gateway.callTool('list_subscribed_skus');
 `riskLevel` and `enabledByDefault` so the host can gate writes. Read tools are
 `enabledByDefault: true`; every write tool is `enabledByDefault: false`.
 
+### Host mode (several tenants in one process)
+
+```ts
+import { createMicrosoft365Gateway, microsoft365ToolCatalog } from 'mcp-server-microsoft365/gateway';
+
+// One instance per call, with an access token the host has just fetched for the tenant
+// (client credentials with its own certificate, scope https://graph.microsoft.com/.default).
+const gateway = createMicrosoft365Gateway({
+  accessToken: await tokens.accessToken(tenantId),
+  policy: { enableWrites: false },
+});
+const users = await gateway.callTool('list_users', { top: 50 });
+```
+
+- **`policy` turns on host mode.** The instance reads no `MS_*` variable, not
+  even for the protection policy, which then refuses everything it guards
+  unless `protection` says otherwise. Writes are refused unless
+  `policy.enableWrites` is true; `policy.disabledTools` (gateway tool names)
+  are left out of `tools` and refused.
+- **`accessToken` is required.** The host is the token provider: it fetches
+  and renews the token, and creates an instance per call. The instance sends
+  it to `https://graph.microsoft.com/v1.0` only; any other `baseUrl` is
+  refused when the instance is created.
+- **Input is checked before any request** against the tool's schema (known
+  fields, types, minimum and maximum, required fields). The error is a fixed
+  text that repeats nothing of the input.
+- **Errors carry only the Graph HTTP status**, never Graph's text, and a
+  result that holds the token is withheld.
+- **Not offered with an app-only token:** `get_user_license_details`
+  (Microsoft Graph does not support application permissions for
+  `GET /users/{id}/licenseDetails`).
+- **`microsoft365ToolCatalog`** is a deeply frozen list of every tool with its
+  `upstream` Graph requests (method and path template, the protection
+  guard's lookups included) and `broad` (false for all). A test holds it
+  against the requests each tool actually makes.
+
 ## Live smoke test
 
 The normal test suite uses mocked `fetch`. With real credentials in the

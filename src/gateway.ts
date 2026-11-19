@@ -434,14 +434,16 @@ const UPSTREAM: Readonly<Record<string, readonly GatewayUpstreamOperation[]>> = 
   set_usage_location: [{ method: 'PATCH', path: '/users/{user}' }],
   update_user: [{ method: 'PATCH', path: '/users/{user}' }],
   reset_password: [...GUARD_LOOKUPS, { method: 'PATCH', path: '/users/{user}' }],
-  set_manager: [{ method: 'PUT', path: '/users/{user}/manager/$ref' }],
+  set_manager: [
+    { method: 'GET', path: '/users/{manager}' },
+    { method: 'PUT', path: '/users/{user}/manager/$ref' },
+  ],
   create_temporary_access_pass: [
     ...GUARD_LOOKUPS,
     { method: 'POST', path: '/users/{user}/authentication/temporaryAccessPassMethods' },
     { method: 'DELETE', path: '/users/{user}/authentication/temporaryAccessPassMethods/{method}' },
   ],
   delete_temporary_access_pass: [
-    ...GUARD_LOOKUPS,
     { method: 'GET', path: '/users/{user}/authentication/temporaryAccessPassMethods' },
     { method: 'DELETE', path: '/users/{user}/authentication/temporaryAccessPassMethods/{method}' },
   ],
@@ -488,6 +490,16 @@ export function createMicrosoft365Gateway(options: Microsoft365GatewayOptions = 
   return createEnvGateway(options);
 }
 
+/** The only address a host-mode instance sends its token to. */
+const HOST_MODE_BASE_URL = GRAPH_DEFAULT_BASE_URL;
+
+/**
+ * Tools a host-mode instance never offers: Microsoft Graph does not support application permissions for them, so an
+ * access fetched with client credentials always fails
+ * (https://learn.microsoft.com/en-us/graph/api/user-list-licensedetails, "Application: Not supported").
+ */
+export const HOST_MODE_UNSUPPORTED: readonly string[] = Object.freeze(['get_user_license_details']);
+
 /** A bearer token as the host gives it: printable ASCII without spaces, of a sensible length. */
 const BEARER = /^[\x21-\x7e]{16,16384}$/;
 
@@ -498,7 +510,11 @@ function createHostGateway(options: Microsoft365GatewayOptions, hostPolicy: Micr
       'A host-mode Microsoft 365 gateway requires options.accessToken. Host-mode instances read nothing from the environment.',
     );
   }
-  const disabled = new Set<string>();
+  // The token goes to Microsoft Graph and nowhere else: no other host, port, scheme or version.
+  if (options.baseUrl !== undefined && options.baseUrl !== HOST_MODE_BASE_URL) {
+    throw new GatewayConfigError(`A host-mode Microsoft 365 gateway only talks to ${HOST_MODE_BASE_URL}.`);
+  }
+  const disabled = new Set<string>(HOST_MODE_UNSUPPORTED);
   for (const name of hostPolicy.disabledTools ?? []) {
     if (!TOOL_NAMES.has(name)) throw new GatewayConfigError(`policy.disabledTools names no gateway tool: ${String(name).slice(0, 100)}`);
     disabled.add(name);
@@ -512,7 +528,7 @@ function createHostGateway(options: Microsoft365GatewayOptions, hostPolicy: Micr
       clientSecret: '',
       refreshToken: '',
       accessToken,
-      baseUrl: options.baseUrl ?? GRAPH_DEFAULT_BASE_URL,
+      baseUrl: HOST_MODE_BASE_URL,
       authorityHost: GRAPH_DEFAULT_AUTHORITY_HOST,
       scope: GRAPH_DEFAULT_SCOPE,
       timeoutMs: options.timeoutMs ?? GRAPH_DEFAULT_TIMEOUT_MS,
@@ -535,8 +551,9 @@ function createHostGateway(options: Microsoft365GatewayOptions, hostPolicy: Micr
     async callTool(toolName: string, input: GatewayJsonObject = {}): Promise<GatewayToolResult> {
       const tool = typeof toolName === 'string' ? byName.get(toolName) : undefined;
       if (!tool) return errorResult('Refused: the tool is not offered on this instance.');
+      // A fixed code and text: nothing of the input (a field name, a value) is repeated.
       const invalid = invalidInput(tool, input);
-      if (invalid) return errorResult(`Invalid input for ${tool.name}: ${invalid}`);
+      if (invalid) return withoutToken(errorResult(`Invalid input for ${tool.name}: ${INVALID_TEXT[invalid]}`), accessToken);
       try {
         return withoutToken(await inner.callTool(tool.name, input), accessToken);
       } catch (error) {
@@ -552,13 +569,24 @@ function definedOnly(value: Partial<ProtectionPolicy>): Partial<ProtectionPolicy
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as Partial<ProtectionPolicy>;
 }
 
-/** Checks the input against the tool's schema: an object, known fields only, required fields present, types. */
-function invalidInput(tool: GatewayToolDefinition, input: unknown): string | undefined {
-  if (typeof input !== 'object' || input === null || Array.isArray(input)) return 'expected an object';
-  const properties = (tool.inputSchema.properties ?? {}) as Record<string, { type?: string }>;
+type InvalidInput = 'not_object' | 'unknown_field' | 'wrong_type' | 'out_of_range' | 'missing_field';
+
+/** The fixed text for each kind of invalid input. */
+const INVALID_TEXT: Readonly<Record<InvalidInput, string>> = {
+  not_object: 'the input must be an object.',
+  unknown_field: 'a field is not in the schema.',
+  wrong_type: 'a field has the wrong type.',
+  out_of_range: 'a number is outside its range.',
+  missing_field: 'a required field is missing.',
+};
+
+/** Checks the input against the tool's schema: an object, known fields only, types, ranges, required fields. */
+function invalidInput(tool: GatewayToolDefinition, input: unknown): InvalidInput | undefined {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return 'not_object';
+  const properties = (tool.inputSchema.properties ?? {}) as Record<string, { type?: string; minimum?: number; maximum?: number }>;
   for (const [key, value] of Object.entries(input)) {
     const schema = Object.prototype.hasOwnProperty.call(properties, key) ? properties[key] : undefined;
-    if (!schema) return `unknown field ${key.slice(0, 50)}`;
+    if (!schema) return 'unknown_field';
     const type = schema.type;
     const ok =
       type === 'string'
@@ -570,10 +598,14 @@ function invalidInput(tool: GatewayToolDefinition, input: unknown): string | und
             : type === 'array'
               ? Array.isArray(value) && value.every(item => typeof item === 'string')
               : true;
-    if (!ok) return `${key} must be a ${String(type)}`;
+    if (!ok) return 'wrong_type';
+    if (typeof value === 'number') {
+      if (typeof schema.minimum === 'number' && value < schema.minimum) return 'out_of_range';
+      if (typeof schema.maximum === 'number' && value > schema.maximum) return 'out_of_range';
+    }
   }
   for (const key of (tool.inputSchema.required ?? []) as string[]) {
-    if (!Object.prototype.hasOwnProperty.call(input, key)) return `missing ${key}`;
+    if (!Object.prototype.hasOwnProperty.call(input, key)) return 'missing_field';
   }
   return undefined;
 }
