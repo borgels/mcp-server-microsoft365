@@ -7,6 +7,8 @@
   The catalog test runs every tool to success against realistic Graph
   answers, so a failure can no longer hide a request.
 - `package-lock.json`: the root package's version is 0.3.0.
+- Development: tsup 9, vitest 5 and @types/node 26 (build and tests only;
+  the published package is unchanged).
 
 ## 0.3.0
 
