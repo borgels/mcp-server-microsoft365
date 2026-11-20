@@ -9,6 +9,8 @@
 - `package-lock.json`: the root package's version is 0.3.0.
 - Development: tsup 9, vitest 5 and @types/node 26 (build and tests only;
   the published package is unchanged).
+- `engines.node` is `>=22.18`: building from source (`prepare`) needs
+  it for tsup 9, and Node 20 is no longer supported.
 
 ## 0.3.0
 

@@ -48,7 +48,7 @@
   "author": "",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=20.11"
+    "node": ">=22.18"
   },
   "bugs": {
     "url": "https://github.com/borgels/mcp-server-microsoft365/issues"
