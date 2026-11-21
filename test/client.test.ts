@@ -77,11 +77,30 @@ describe('GraphClient', () => {
       fetchImpl: fetchMock as unknown as typeof fetch,
     });
 
-    await expect(client.get('/users')).rejects.toMatchObject({
-      status: 429,
-      retryAfter: '30',
-      requestId: 'req-123',
+    const error = (await client.get('/users').catch(caught => caught)) as GraphHttpError;
+    expect(error).toMatchObject({ status: 429, retryAfter: '30' });
+    // The message keeps the header's value; the field holds a request id only in the form of one (a UUID or hex id).
+    expect(error.message).toContain('request-id=req-123');
+    expect(error.requestId).toBeUndefined();
+  });
+
+  it('keeps a request id in the form of one, from the token endpoint too', async () => {
+    const id = '3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b';
+    const graph = new GraphClient({
+      accessToken: 'static-token',
+      baseUrl: 'https://graph.example.test/v1.0',
+      fetchImpl: (async () => Response.json({}, { status: 503, headers: { 'request-id': id } })) as typeof fetch,
     });
+    await expect(graph.get('/users')).rejects.toMatchObject({ status: 503, requestId: id });
+    const app = new GraphClient({
+      tenantId: 'tenant-1',
+      clientId: 'client-1',
+      clientSecret: 'secret-value-1',
+      baseUrl: 'https://graph.example.test/v1.0',
+      fetchImpl: (async () =>
+        Response.json({ error: 'invalid_client', error_description: 'Jane Doe' }, { status: 401, headers: { 'x-ms-request-id': id } })) as typeof fetch,
+    });
+    await expect(app.get('/users')).rejects.toMatchObject({ status: 401, requestId: id });
   });
 
   it('formats and redacts API errors', () => {

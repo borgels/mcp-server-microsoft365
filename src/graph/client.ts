@@ -1,5 +1,5 @@
 import { type Env, readEnvInteger } from '../config-env.js';
-import { GraphHttpError } from '../errors.js';
+import { GraphHttpError, requestIdFrom } from '../errors.js';
 import { pathSegment } from './path.js';
 
 export const GRAPH_DEFAULT_BASE_URL = 'https://graph.microsoft.com/v1.0';
@@ -180,7 +180,9 @@ export class GraphClient {
         url,
         payload: responseBody,
         retryAfter: response.headers.get('retry-after') ?? undefined,
+        // An id in the form of one first (REQUEST_ID_HEADERS), else the header's value as before, for the message.
         requestId:
+          requestIdFrom(response.headers) ??
           response.headers.get('request-id') ??
           response.headers.get('x-ms-request-id') ??
           response.headers.get('client-request-id') ??
@@ -273,6 +275,7 @@ export class GraphClient {
         method: 'POST',
         url,
         payload: responseBody,
+        requestId: requestIdFrom(response.headers),
         fallbackMessage: typeof responseBody === 'string' ? responseBody : undefined,
       });
     }
@@ -333,6 +336,7 @@ export class GraphClient {
         method: 'POST',
         url,
         payload: responseBody,
+        requestId: requestIdFrom(response.headers),
         fallbackMessage: typeof responseBody === 'string' ? responseBody : undefined,
       });
     }
@@ -456,6 +460,7 @@ function assertNotRedirect(response: Response, method: string, url: string): voi
     status: response.status,
     method,
     url,
+    requestId: requestIdFrom(response.headers),
     fallbackMessage: 'Microsoft Graph responded with a redirect; redirects are not followed.',
   });
 }

@@ -333,7 +333,14 @@ const users = await gateway.callTool('list_users', { top: 50 });
   fields, types, minimum and maximum, required fields). The error is a fixed
   text that repeats nothing of the input.
 - **Errors carry only the Graph HTTP status**, never Graph's text, and a
-  result that holds the token is withheld.
+  result that holds the token is withheld. An error result from Graph (an
+  HTTP error or a redirect, which is not followed) also has
+  `failure: { httpStatus, requestId? }`: the status, and Graph's request id
+  (`request-id`, then the other `REQUEST_ID_HEADERS` in `src/errors.ts`) only
+  when it is a hex id of 8 to 64 characters (one run of hex digits, or groups
+  of four or more joined by single hyphens, as in a UUID), does not hold the
+  shape of a personal number and shares no piece of the token, so a host can
+  count failures without reading their text.
 - **Not offered with an app-only token:** `get_user_license_details`
   (Microsoft Graph does not support application permissions for
   `GET /users/{id}/licenseDetails`).

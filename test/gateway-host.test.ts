@@ -79,7 +79,11 @@ describe('host mode', () => {
   it('gives a Graph error as a fixed text with only the status', async () => {
     const { gateway } = host(() => Response.json({ error: { code: 'Authorization_RequestDenied', message: 'Insufficient privileges secret-ish' } }, { status: 403 }));
     const result = await gateway.callTool('list_groups', {});
-    expect(result).toEqual({ isError: true, content: [{ type: 'text', text: 'Microsoft Graph request failed with HTTP 403' }] });
+    expect(result).toEqual({
+      isError: true,
+      content: [{ type: 'text', text: 'Microsoft Graph request failed with HTTP 403' }],
+      failure: { httpStatus: 403 },
+    });
   });
 
   it('withholds an answer that holds the token', async () => {

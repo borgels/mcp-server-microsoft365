@@ -1,7 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
+- Host-mode gateway error results carry failure metadata: when Microsoft
+  Graph answered with an HTTP error or a redirect (never followed), the
+  result has `failure: { httpStatus, requestId? }`, so a host can count
+  failures by status without reading their text. `requestId` is Graph's own
+  id from a response header (`REQUEST_ID_HEADERS`: `request-id`,
+  `client-request-id`, `x-ms-request-id` first), kept only when it is a hex
+  id of 8 to 64 characters (one run of hex digits, or groups of four or more
+  joined by single hyphens, as in a UUID), does not hold the shape of a
+  personal number and shares no piece of six characters with the token. The
+  text is unchanged. `GraphHttpError.requestId` now holds only an id in that
+  form (the message keeps the header's value as before), errors from the
+  token endpoint keep its request id too, and `failureMetadata` is exported
+  from `./gateway` for an environment-mode instance, whose errors are thrown.
 - `microsoft365ToolCatalog`: `create_user` lists no PATCH, and password
   reset and temporary access passes list no group lookup (they do neither).
   The catalog test runs every tool to success against realistic Graph
