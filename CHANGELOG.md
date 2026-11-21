@@ -15,6 +15,10 @@
   form (the message keeps the header's value as before), errors from the
   token endpoint keep its request id too, and `failureMetadata` is exported
   from `./gateway` for an environment-mode instance, whose errors are thrown.
+- A refusal because a protection lookup failed at Graph (`Refused: the
+  target is protected.`) carries that failure's metadata, and an HTTP error
+  whose body cannot be read is still raised with its status and request id
+  (the body is left out) instead of being lost to the failed read.
 - `microsoft365ToolCatalog`: `create_user` lists no PATCH, and password
   reset and temporary access passes list no group lookup (they do neither).
   The catalog test runs every tool to success against realistic Graph

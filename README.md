@@ -340,7 +340,8 @@ const users = await gateway.callTool('list_users', { top: 50 });
   when it is a hex id of 8 to 64 characters (one run of hex digits, or groups
   of four or more joined by single hyphens, as in a UUID), does not hold the
   shape of a personal number and shares no piece of the token, so a host can
-  count failures without reading their text.
+  count failures without reading their text. A refusal because a protection
+  lookup failed at Graph carries that failure's metadata too.
 - **Not offered with an app-only token:** `get_user_license_details`
   (Microsoft Graph does not support application permissions for
   `GET /users/{id}/licenseDetails`).

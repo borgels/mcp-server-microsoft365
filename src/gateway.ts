@@ -576,7 +576,11 @@ function createHostGateway(options: Microsoft365GatewayOptions, hostPolicy: Micr
           const failed = errorResult(`Microsoft Graph request failed with HTTP ${error.status}`, failureWithoutToken(error, accessToken));
           return withFailureInForm(withoutToken(failed, accessToken));
         }
-        if (error instanceof ProtectedTargetError) return errorResult('Refused: the target is protected.');
+        if (error instanceof ProtectedTargetError) {
+          // A refusal because a directory lookup failed at Graph keeps that HTTP failure's metadata.
+          const refused = errorResult('Refused: the target is protected.', failureWithoutToken(error, accessToken));
+          return withFailureInForm(withoutToken(refused, accessToken));
+        }
         return errorResult('The Microsoft 365 call could not be completed.');
       }
     },
@@ -631,9 +635,9 @@ function invalidInput(tool: GatewayToolDefinition, input: unknown): InvalidInput
 /** Pieces of this many characters of the token may not appear in a request id. */
 const TOKEN_PIECE = 6;
 
-/** The failure metadata of an error, without a request id that shares a piece of TOKEN_PIECE characters with the token. */
+/** The failure metadata of an error (a Graph HTTP error, or a refusal caused by one), without a request id that shares a piece of TOKEN_PIECE characters with the token. */
 function failureWithoutToken(error: unknown, token: string): GatewayFailure | undefined {
-  const failure = failureMetadata(error);
+  const failure = error instanceof ProtectedTargetError ? failureFrom(error.status, error.requestId) : failureMetadata(error);
   const id = failure?.requestId;
   if (failure === undefined || id === undefined) return failure;
   for (let i = 0; i + TOKEN_PIECE <= id.length; i += 1) {

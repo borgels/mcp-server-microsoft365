@@ -114,6 +114,46 @@ describe('host-mode error results', () => {
     expect(JSON.stringify(result)).not.toContain('deadbeef0011');
   });
 
+  it('keep the status and request id when the error body cannot be read', async () => {
+    const broken = () =>
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.error(new TypeError('terminated'));
+        },
+      });
+    const gw = createMicrosoft365Gateway({
+      accessToken: TOKEN,
+      policy: {},
+      fetchImpl: async () => new Response(broken(), { status: 503, headers: { 'content-type': 'application/json', 'request-id': UUID } }),
+    });
+    const result = await gw.callTool('get_user', { user: 'a@example.com' });
+    expect(result.isError).toBe(true);
+    expect(result.failure).toEqual({ httpStatus: 503, requestId: UUID });
+  });
+
+  it('carry the metadata of a failed directory lookup behind a refusal', async () => {
+    const gw = createMicrosoft365Gateway({
+      accessToken: TOKEN,
+      policy: { enableWrites: true },
+      fetchImpl: async () =>
+        new Response(JSON.stringify(BODY), { status: 503, headers: { 'content-type': 'application/json', 'request-id': UUID } }),
+    });
+    for (const [tool, input] of [
+      ['add_group_member', { groupId: 'g1', userId: 'u1' }],
+      ['remove_group_member', { groupId: 'g1', userId: 'u1' }],
+    ] as const) {
+      const result = await gw.callTool(tool, input);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toBe('Refused: the target is protected.');
+      expect(result.failure).toEqual({ httpStatus: 503, requestId: UUID });
+      expect(JSON.stringify(result)).not.toContain('Jane Doe');
+    }
+    // A refusal by the policy itself has none.
+    const refused = await gw.callTool('reset_password', { user: 'a@example.com' });
+    expect(refused.isError).toBe(true);
+    expect(refused.failure).toBeUndefined();
+  });
+
   it('have no metadata when the cause is not Microsoft Graph', async () => {
     const gw = hostAnswering(200, {}, {});
     expect((await gw.callTool('get_user', {})).failure).toBeUndefined();

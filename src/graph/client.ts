@@ -171,7 +171,7 @@ export class GraphClient {
     });
 
     assertNotRedirect(response, request.method, url);
-    const responseBody = response.ok ? await readResponseBody(response) : await readErrorBody(response);
+    const responseBody = response.ok ? await readResponseBody(response) : await readErrorBodyOrNothing(response);
 
     if (!response.ok) {
       throw new GraphHttpError({
@@ -268,7 +268,7 @@ export class GraphClient {
     });
 
     assertNotRedirect(response, 'POST', url);
-    const responseBody = response.ok ? await readResponseBody(response) : await readErrorBody(response);
+    const responseBody = response.ok ? await readResponseBody(response) : await readErrorBodyOrNothing(response);
     if (!response.ok) {
       throw new GraphHttpError({
         status: response.status,
@@ -329,7 +329,7 @@ export class GraphClient {
     });
 
     assertNotRedirect(response, 'POST', url);
-    const responseBody = response.ok ? await readResponseBody(response) : await readErrorBody(response);
+    const responseBody = response.ok ? await readResponseBody(response) : await readErrorBodyOrNothing(response);
     if (!response.ok) {
       throw new GraphHttpError({
         status: response.status,
@@ -404,6 +404,18 @@ async function readResponseBody(response: Response): Promise<unknown> {
  * Error bodies are read up to MAX_ERROR_BODY_BYTES; JSON is parsed only when
  * complete, otherwise the (redacted, truncated) text is reported.
  */
+/**
+ * The error body, or undefined when it cannot be read: the status and headers have been received, so the HTTP error
+ * (with its status and request id) is still raised rather than lost to a failed read.
+ */
+async function readErrorBodyOrNothing(response: Response): Promise<unknown> {
+  try {
+    return await readErrorBody(response);
+  } catch {
+    return undefined;
+  }
+}
+
 async function readErrorBody(response: Response): Promise<unknown> {
   const { text, exceeded } = await readTextUpTo(response, MAX_ERROR_BODY_BYTES);
   if (!text) {
