@@ -1,3 +1,4 @@
+import { GraphHttpError } from '../errors.js';
 import type { GraphClient } from './client.js';
 import { pathSegment } from './path.js';
 
@@ -33,9 +34,18 @@ export function protectionPolicyFromEnv(env: NodeJS.ProcessEnv = process.env): P
 }
 
 export class ProtectedTargetError extends Error {
-  constructor(message: string) {
+  /** When a directory lookup failed with an HTTP error from Microsoft Graph: its status, for the failure metadata. */
+  readonly status?: number;
+  /** And its request id, only in the form of one (see GraphHttpError.requestId). */
+  readonly requestId?: string;
+
+  constructor(message: string, cause?: { status: number; requestId?: string }) {
     super(message);
     this.name = 'ProtectedTargetError';
+    if (cause) {
+      this.status = cause.status;
+      this.requestId = cause.requestId;
+    }
   }
 }
 
@@ -180,7 +190,9 @@ async function listAll<T>(client: GraphClient, path: string, query: Record<strin
 
 function lookupFailed(what: string, error: unknown): ProtectedTargetError {
   const detail = error instanceof Error ? error.message : String(error);
-  return new ProtectedTargetError(`Refusing: could not verify ${what} is not privileged (${detail}). Failing closed.`);
+  // A Graph HTTP error keeps its status and request id, so the refusal still carries the failure metadata.
+  const cause = error instanceof GraphHttpError ? { status: error.status, requestId: error.requestId } : undefined;
+  return new ProtectedTargetError(`Refusing: could not verify ${what} is not privileged (${detail}). Failing closed.`, cause);
 }
 
 function parseList(value: string | undefined): string[] {

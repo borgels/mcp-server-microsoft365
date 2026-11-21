@@ -7,7 +7,9 @@ import {
   type GraphClientOptions,
   type GraphQueryValue,
 } from './graph/client.js';
-import { GraphHttpError } from './errors.js';
+import { failureFrom, failureMetadata, GraphHttpError, type FailureMetadata } from './errors.js';
+
+export { failureMetadata } from './errors.js';
 import {
   addGroupMember,
   assignLicense,
@@ -40,10 +42,19 @@ export interface GatewayToolDefinition {
   inputSchema: GatewayJsonObject;
 }
 
+/**
+ * Metadata about a failed call, on an error result whose cause is known: the HTTP status Microsoft Graph answered
+ * with, and its request id when a response header gives one as a UUID or hex id. For a host that counts failures
+ * without reading their text. Never the response body, Graph's error code or message, or the input.
+ */
+export type GatewayFailure = FailureMetadata;
+
 export interface GatewayToolResult {
   content: Array<{ type: 'text'; text: string }>;
   structuredContent?: GatewayJsonValue;
   isError?: boolean;
+  /** On an error result from Microsoft Graph only (host mode): its HTTP status and request id (see GatewayFailure). */
+  failure?: GatewayFailure;
 }
 
 export interface Microsoft365GatewayOptions extends GraphClientOptions {
@@ -559,8 +570,17 @@ function createHostGateway(options: Microsoft365GatewayOptions, hostPolicy: Micr
       try {
         return withoutToken(await inner.callTool(tool.name, input), accessToken);
       } catch (error) {
-        if (error instanceof GraphHttpError) return errorResult(`Microsoft Graph request failed with HTTP ${error.status}`);
-        if (error instanceof ProtectedTargetError) return errorResult('Refused: the target is protected.');
+        if (error instanceof GraphHttpError) {
+          // The status and request id as metadata, checked against the token like the rest of the result, then
+          // checked again for their form as the last step.
+          const failed = errorResult(`Microsoft Graph request failed with HTTP ${error.status}`, failureWithoutToken(error, accessToken));
+          return withFailureInForm(withoutToken(failed, accessToken));
+        }
+        if (error instanceof ProtectedTargetError) {
+          // A refusal because a directory lookup failed at Graph keeps that HTTP failure's metadata.
+          const refused = errorResult('Refused: the target is protected.', failureWithoutToken(error, accessToken));
+          return withFailureInForm(withoutToken(refused, accessToken));
+        }
         return errorResult('The Microsoft 365 call could not be completed.');
       }
     },
@@ -610,6 +630,31 @@ function invalidInput(tool: GatewayToolDefinition, input: unknown): InvalidInput
     if (!Object.prototype.hasOwnProperty.call(input, key)) return 'missing_field';
   }
   return undefined;
+}
+
+/** Pieces of this many characters of the token may not appear in a request id. */
+const TOKEN_PIECE = 6;
+
+/** The failure metadata of an error (a Graph HTTP error, or a refusal caused by one), without a request id that shares a piece of TOKEN_PIECE characters with the token. */
+function failureWithoutToken(error: unknown, token: string): GatewayFailure | undefined {
+  const failure = error instanceof ProtectedTargetError ? failureFrom(error.status, error.requestId) : failureMetadata(error);
+  const id = failure?.requestId;
+  if (failure === undefined || id === undefined) return failure;
+  for (let i = 0; i + TOKEN_PIECE <= id.length; i += 1) {
+    if (token.includes(id.slice(i, i + TOKEN_PIECE))) return { httpStatus: failure.httpStatus };
+  }
+  return failure;
+}
+
+/**
+ * The failure metadata as it must be when the result leaves: on an error result only, a status of 100-599 and a
+ * request id in the form of one. Anything else is dropped, never passed on.
+ */
+function withFailureInForm(result: GatewayToolResult): GatewayToolResult {
+  const { failure, ...rest } = result;
+  if (!result.isError || failure === undefined || failure === null || typeof failure !== 'object') return rest;
+  const checked = failureFrom(failure.httpStatus, failure.requestId);
+  return checked === undefined ? rest : { ...rest, failure: checked };
 }
 
 /** A result that holds the instance's token anywhere (it never should) is withheld whole. */
@@ -851,9 +896,10 @@ function jsonResult(text: string, structuredContent: unknown): GatewayToolResult
   };
 }
 
-function errorResult(text: string): GatewayToolResult {
+function errorResult(text: string, failure?: GatewayFailure): GatewayToolResult {
   return {
     isError: true,
     content: [{ type: 'text', text }],
+    ...(failure ? { failure } : {}),
   };
 }
