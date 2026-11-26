@@ -3,8 +3,10 @@ import type { GraphClient } from './client.js';
 import { pathSegment } from './path.js';
 
 /**
- * Guardrails for the operations that can hand an account to someone else
- * (password reset, Temporary Access Pass) or change group membership.
+ * Guardrails for every operation that changes an existing user: profile and
+ * account (update_user, set_usage_location, set_manager), licences, group
+ * membership, password reset and Temporary Access Passes. Only create_user,
+ * which makes a new account, runs without them.
  *
  * Privileged identities are refused: any user holding a directory role
  * (directly, through a role-assignable group, or scoped to an administrative

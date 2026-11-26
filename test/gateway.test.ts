@@ -136,7 +136,7 @@ describe('Microsoft 365 gateway export', () => {
 
   it('assigns a license, setting usage location first', async () => {
     const calls: string[] = [];
-    const { gateway } = makeGateway(req => {
+    const { gateway } = makeGateway(ordinaryDirectory(req => {
       const url = new URL(req.url);
       calls.push(`${req.method} ${url.pathname}`);
       if (req.method === 'PATCH' && url.pathname === '/v1.0/users/u1') {
@@ -151,7 +151,7 @@ describe('Microsoft 365 gateway export', () => {
         return Response.json({ id: 'u1' });
       }
       throw new Error(`unexpected ${req.method} ${url.pathname}`);
-    });
+    }));
 
     const result = await gateway.callTool('assign_license', { user: 'u1', license: 'E3', usageLocation: 'DK' });
 
@@ -160,19 +160,19 @@ describe('Microsoft 365 gateway export', () => {
       usageLocation: 'DK',
       assigned: { skuId: 'sku-e3', skuPartNumber: 'SPE_E3' },
     });
-    // usageLocation PATCH happens before the SKU lookup/assignment.
+    // usageLocation PATCH happens before the SKU lookup/assignment (the guard's lookups are answered above).
     expect(calls[0]).toBe('PATCH /v1.0/users/u1');
     expect(calls).toContain('POST /v1.0/users/u1/assignLicense');
   });
 
   it('refuses license assignment when the user has no usage location', async () => {
-    const { gateway } = makeGateway(req => {
+    const { gateway } = makeGateway(ordinaryDirectory(req => {
       const url = new URL(req.url);
       if (req.method === 'GET' && url.pathname === '/v1.0/users/u2') {
         return Response.json({ usageLocation: null });
       }
       throw new Error(`unexpected ${req.method} ${url.pathname}`);
-    });
+    }));
 
     await expect(gateway.callTool('assign_license', { user: 'u2', license: 'E3' })).rejects.toThrow(/usageLocation/);
   });
@@ -190,13 +190,13 @@ describe('Microsoft 365 gateway export', () => {
   });
 
   it('updates only the provided user fields via PATCH, including accountEnabled', async () => {
-    const { gateway, requests } = makeGateway(req => {
+    const { gateway, requests } = makeGateway(ordinaryDirectory(req => {
       const url = new URL(req.url);
       if (req.method === 'PATCH' && url.pathname === '/v1.0/users/u1') {
         return new Response(null, { status: 204 });
       }
       throw new Error(`unexpected ${req.method} ${url.pathname}`);
-    });
+    }));
 
     const result = await gateway.callTool('update_user', {
       user: 'u1',
@@ -210,7 +210,7 @@ describe('Microsoft 365 gateway export', () => {
     expect((result.structuredContent as { updated: string[] }).updated).toEqual(
       expect.arrayContaining(['accountEnabled', 'jobTitle', 'department', 'otherMails']),
     );
-    const body = JSON.parse((await requests[0]!.text()) || '{}');
+    const body = JSON.parse((await requests.find(r => r.method === 'PATCH')!.text()) || '{}');
     expect(body).toEqual({
       accountEnabled: true,
       jobTitle: 'Sales Executive',
@@ -221,17 +221,17 @@ describe('Microsoft 365 gateway export', () => {
 
   it('sets a manager via PUT manager/$ref with a directoryObjects reference', async () => {
     const id = '11111111-2222-3333-4444-555555555555';
-    const { gateway, requests } = makeGateway(req => {
+    const { gateway, requests } = makeGateway(ordinaryDirectory(req => {
       const url = new URL(req.url);
       if (req.method === 'PUT' && url.pathname === '/v1.0/users/u1/manager/$ref') {
         return new Response(null, { status: 204 });
       }
       throw new Error(`unexpected ${req.method} ${url.pathname}`);
-    });
+    }));
 
     const result = await gateway.callTool('set_manager', { user: 'u1', manager: id });
     expect(result.structuredContent).toMatchObject({ userId: 'u1', managerId: id });
-    const body = JSON.parse((await requests[0]!.text()) || '{}');
+    const body = JSON.parse((await requests.find(r => r.method === 'PUT')!.text()) || '{}');
     expect(body['@odata.id']).toContain(`/directoryObjects/${id}`);
   });
 
@@ -239,7 +239,7 @@ describe('Microsoft 365 gateway export', () => {
     // /directoryObjects addresses an object id and nothing else; a UPN produced
     // 400 Request_BadRequest: Invalid object identifier 'manager@example.com'.
     const id = '99999999-8888-7777-6666-555555555555';
-    const { gateway, requests } = makeGateway(req => {
+    const { gateway, requests } = makeGateway(ordinaryDirectory(req => {
       const url = new URL(req.url);
       if (req.method === 'GET' && decodeURIComponent(url.pathname) === '/v1.0/users/manager@example.com') {
         return Response.json({ id }, { status: 200 });
@@ -248,7 +248,7 @@ describe('Microsoft 365 gateway export', () => {
         return new Response(null, { status: 204 });
       }
       throw new Error(`unexpected ${req.method} ${url.pathname}`);
-    });
+    }));
 
     const result = await gateway.callTool('set_manager', { user: 'employee@example.com', manager: 'manager@example.com' });
     expect(result.structuredContent).toMatchObject({ managerObjectId: id });
@@ -286,7 +286,7 @@ describe('Microsoft 365 gateway export', () => {
 
   it('deletes all Temporary Access Passes when no methodId is given', async () => {
     const deletes: string[] = [];
-    const { gateway } = makeGateway(req => {
+    const { gateway } = makeGateway(ordinaryDirectory(req => {
       const url = new URL(req.url);
       const path = url.pathname;
       const base = '/v1.0/users/u1/authentication/temporaryAccessPassMethods';
@@ -298,7 +298,7 @@ describe('Microsoft 365 gateway export', () => {
         return new Response(null, { status: 204 });
       }
       throw new Error(`unexpected ${req.method} ${path}`);
-    });
+    }));
 
     const result = await gateway.callTool('delete_temporary_access_pass', { user: 'u1' });
     expect(result.structuredContent).toMatchObject({ deleted: ['t1', 't2'] });
@@ -388,14 +388,14 @@ describe('replication lag on writes', () => {
         { error: { code: 'Request_ResourceNotFound', message: "Resource 'partner@example.com' does not exist" } },
         { status: 404 },
       );
-    const { gateway } = makeGateway(req => {
+    const { gateway } = makeGateway(ordinaryDirectory(req => {
       if (req.method === 'PATCH') {
         patches += 1;
         return patches < 3 ? missing() : new Response(null, { status: 204 });
       }
       gets += 1;
       return missing();
-    });
+    }));
 
     await gateway.callTool('update_user', { user: 'partner@example.com', jobTitle: 'Partner' });
     expect(patches).toBe(3);

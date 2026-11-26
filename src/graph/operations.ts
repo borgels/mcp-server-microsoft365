@@ -142,9 +142,16 @@ export async function setUsageLocation(
   client: GraphClient,
   userId: string,
   usageLocation: string,
+  policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ userId: string; usageLocation: string }> {
-  await client.patch(`/users/${pathSegment(userId, 'userId')}`, { usageLocation });
+  await assertUserNotPrivileged(client, userId, policy);
+  await patchUsageLocation(client, userId, usageLocation);
   return { userId, usageLocation };
+}
+
+/** The PATCH itself, for callers that have run the guard already. */
+async function patchUsageLocation(client: GraphClient, userId: string, usageLocation: string): Promise<void> {
+  await client.patch(`/users/${pathSegment(userId, 'userId')}`, { usageLocation });
 }
 
 export async function listSubscribedSkus(client: GraphClient): Promise<SubscribedSku[]> {
@@ -163,13 +170,15 @@ async function getUserUsageLocation(client: GraphClient, userId: string): Promis
 export async function assignLicense(
   client: GraphClient,
   input: AssignLicenseInput,
+  policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ userId: string; assigned: SkuResolution; usageLocation: string }> {
   assertSafePathParam(input.userId, 'userId');
+  await assertUserNotPrivileged(client, input.userId, policy);
   // usageLocation MUST be set before assigning a license, otherwise Graph
   // rejects the assignment with an "invalid usage location" error.
   let usageLocation = input.usageLocation?.trim();
   if (usageLocation) {
-    await setUsageLocation(client, input.userId, usageLocation);
+    await patchUsageLocation(client, input.userId, usageLocation);
   } else {
     usageLocation = await getUserUsageLocation(client, input.userId);
     if (!usageLocation) {
@@ -204,8 +213,10 @@ export async function assignLicense(
 export async function removeLicense(
   client: GraphClient,
   input: RemoveLicenseInput,
+  policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ userId: string; removed: SkuResolution }> {
   assertSafePathParam(input.userId, 'userId');
+  await assertUserNotPrivileged(client, input.userId, policy);
   const skus = await listSubscribedSkus(client);
   const resolved = resolveSkuId(skus, input.license);
   if (!resolved) {
@@ -314,6 +325,7 @@ export async function updateUser(
   client: GraphClient,
   userId: string,
   patch: UpdateUserInput,
+  policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ userId: string; updated: string[] }> {
   const body: Record<string, unknown> = {};
   for (const key of UPDATE_USER_FIELDS) {
@@ -327,6 +339,7 @@ export async function updateUser(
     throw new Error('updateUser requires at least one field to change.');
   }
 
+  await assertUserNotPrivileged(client, userId, policy);
   await client.patch(`/users/${pathSegment(userId, 'userId')}`, body);
   return { userId, updated };
 }
@@ -361,7 +374,11 @@ export async function setManager(
   client: GraphClient,
   userId: string,
   managerId: string,
+  policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ userId: string; managerId: string; managerObjectId: string }> {
+  // The user whose manager changes is the object that is written, so it must be an ordinary user. The manager is
+  // only referenced: its own account is not changed, and an administrator may well be someone's manager.
+  await assertUserNotPrivileged(client, userId, policy);
   // /directoryObjects addresses an OBJECT ID and nothing else. The tool takes a
   // userRef like every other tool here, so a UPN arrives routinely and produced
   // `400 Request_BadRequest: Invalid object identifier 'manager@example.com'`.
@@ -390,7 +407,9 @@ async function resolveObjectId(client: GraphClient, ref: string): Promise<string
 export async function removeManager(
   client: GraphClient,
   userId: string,
+  policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ userId: string; removed: boolean }> {
+  await assertUserNotPrivileged(client, userId, policy);
   try {
     await client.delete(`/users/${pathSegment(userId, 'userId')}/manager/$ref`);
     return { userId, removed: true };
@@ -502,6 +521,7 @@ export async function deleteTemporaryAccessPass(
   policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ userId: string; deleted: string[] }> {
   assertTapAllowed(policy);
+  await assertUserNotPrivileged(client, userId, policy);
   const path = tapMethodsPath(userId);
 
   if (methodId) {

@@ -286,7 +286,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
             license: input.license,
             usageLocation: input.usageLocation,
             disabledPlans: input.disabledPlans,
-          }),
+          }, policy),
         ),
       ),
   );
@@ -300,7 +300,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       annotations: DESTRUCTIVE_TOOL_ANNOTATIONS,
     },
     async input =>
-      runTool(async () => jsonToolResult(await removeLicense(client, { userId: input.user, license: input.license }))),
+      runTool(async () => jsonToolResult(await removeLicense(client, { userId: input.user, license: input.license }, policy))),
   );
 
   register(
@@ -333,7 +333,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       inputSchema: { user: userRef, usageLocation },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async input => runTool(async () => jsonToolResult(await setUsageLocation(client, input.user, input.usageLocation))),
+    async input => runTool(async () => jsonToolResult(await setUsageLocation(client, input.user, input.usageLocation, policy))),
   );
 
   register(
@@ -367,7 +367,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
     },
     async input => {
       const { user, ...patch } = input;
-      return runTool(async () => jsonToolResult(await updateUser(client, user, patch)));
+      return runTool(async () => jsonToolResult(await updateUser(client, user, patch, policy)));
     },
   );
 
@@ -391,7 +391,7 @@ export function registerMicrosoft365Tools(server: McpServer, client: GraphClient
       inputSchema: { user: userRef, manager: userRef },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async input => runTool(async () => jsonToolResult(await setManager(client, input.user, input.manager))),
+    async input => runTool(async () => jsonToolResult(await setManager(client, input.user, input.manager, policy))),
   );
 
   registerIf(policy.allowTap)(

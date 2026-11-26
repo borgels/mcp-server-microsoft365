@@ -433,21 +433,24 @@ const UPSTREAM: Readonly<Record<string, readonly GatewayUpstreamOperation[]>> = 
     { method: 'POST', path: '/users' },
   ],
   assign_license: [
+    ...USER_GUARD_LOOKUPS,
     { method: 'GET', path: '/subscribedSkus' },
     { method: 'GET', path: '/users/{user}' },
     { method: 'PATCH', path: '/users/{user}' },
     { method: 'POST', path: '/users/{user}/assignLicense' },
   ],
   remove_license: [
+    ...USER_GUARD_LOOKUPS,
     { method: 'GET', path: '/subscribedSkus' },
     { method: 'POST', path: '/users/{user}/assignLicense' },
   ],
   add_group_member: [...GROUP_GUARD_LOOKUPS, { method: 'POST', path: '/groups/{group}/members/$ref' }],
   remove_group_member: [...GROUP_GUARD_LOOKUPS, { method: 'DELETE', path: '/groups/{group}/members/{user}/$ref' }],
-  set_usage_location: [{ method: 'PATCH', path: '/users/{user}' }],
-  update_user: [{ method: 'PATCH', path: '/users/{user}' }],
+  set_usage_location: [...USER_GUARD_LOOKUPS, { method: 'PATCH', path: '/users/{user}' }],
+  update_user: [...USER_GUARD_LOOKUPS, { method: 'PATCH', path: '/users/{user}' }],
   reset_password: [...USER_GUARD_LOOKUPS, { method: 'PATCH', path: '/users/{user}' }],
   set_manager: [
+    ...USER_GUARD_LOOKUPS,
     { method: 'GET', path: '/users/{manager}' },
     { method: 'PUT', path: '/users/{user}/manager/$ref' },
   ],
@@ -457,6 +460,7 @@ const UPSTREAM: Readonly<Record<string, readonly GatewayUpstreamOperation[]>> = 
     { method: 'DELETE', path: '/users/{user}/authentication/temporaryAccessPassMethods/{method}' },
   ],
   delete_temporary_access_pass: [
+    ...USER_GUARD_LOOKUPS,
     { method: 'GET', path: '/users/{user}/authentication/temporaryAccessPassMethods' },
     { method: 'DELETE', path: '/users/{user}/authentication/temporaryAccessPassMethods/{method}' },
   ],
@@ -732,7 +736,7 @@ function createEnvGateway(options: Microsoft365GatewayOptions, fixedProtection?:
               license: requiredString(input.license, 'license'),
               usageLocation: stringValue(input.usageLocation),
               disabledPlans: stringArray(input.disabledPlans),
-            }),
+            }, policy),
           );
 
         case 'remove_license':
@@ -741,7 +745,7 @@ function createEnvGateway(options: Microsoft365GatewayOptions, fixedProtection?:
             await removeLicense(client, {
               userId: requiredString(input.user, 'user'),
               license: requiredString(input.license, 'license'),
-            }),
+            }, policy),
           );
 
         case 'add_group_member':
@@ -759,13 +763,13 @@ function createEnvGateway(options: Microsoft365GatewayOptions, fixedProtection?:
         case 'set_usage_location':
           return jsonResult(
             'Set usage location.',
-            await setUsageLocation(client, requiredString(input.user, 'user'), requiredString(input.usageLocation, 'usageLocation')),
+            await setUsageLocation(client, requiredString(input.user, 'user'), requiredString(input.usageLocation, 'usageLocation'), policy),
           );
 
         case 'update_user':
           return jsonResult(
             'Updated user.',
-            await updateUser(client, requiredString(input.user, 'user'), updateUserPatch(input)),
+            await updateUser(client, requiredString(input.user, 'user'), updateUserPatch(input), policy),
           );
 
         case 'reset_password':
@@ -777,7 +781,7 @@ function createEnvGateway(options: Microsoft365GatewayOptions, fixedProtection?:
         case 'set_manager':
           return jsonResult(
             'Set manager.',
-            await setManager(client, requiredString(input.user, 'user'), requiredString(input.manager, 'manager')),
+            await setManager(client, requiredString(input.user, 'user'), requiredString(input.manager, 'manager'), policy),
           );
 
         case 'create_temporary_access_pass':
