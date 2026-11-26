@@ -14,8 +14,10 @@
   `MICROSOFT365_DELEGATED_PERMISSIONS` is the list for an app registration.
 - Refused before anything is sent, with fixed texts (`REFUSAL_TEXT`):
   changing or deleting a message that is not a draft, deleting an event with
-  attendees or one the person does not organise, moving a sent message to
-  Deleted Items, moving anything into the recoverable items folders. No tool
+  attendees or one the person does not organise, moving a message the person
+  has sent (not a draft, sender the person) to Deleted Items wherever it lies,
+  moving anything into the recoverable items folders; a failed lookup moves
+  nothing. No tool
   for inbox rules, forwarding settings, other mailbox settings, permanent
   deletion, deletion of sent mail, files or versions, sharing or members.
 - `GraphClient.upload`, `redirectLocation` and `downloadPreauthenticated`

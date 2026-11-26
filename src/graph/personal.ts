@@ -8,6 +8,7 @@
  * moving a sent message to Deleted Items, and moving anything into the recoverable items folders.
  */
 import type { GraphClient, GraphQueryValue } from './client.js';
+import { GraphHttpError } from '../errors.js';
 import { pathSegment } from './path.js';
 
 /** Why a change was refused before anything was sent. The code is the message, and both are fixed. */
@@ -317,25 +318,56 @@ export async function createForwardDraft(client: GraphClient, messageId: string,
 
 const RECOVERABLE = /^recoverableitems/i;
 
+/** An e-mail address as given in a message or a profile, lower case; empty when there is none. */
+function addressOf(value: unknown): string {
+  const address = (value as { emailAddress?: { address?: unknown } } | null | undefined)?.emailAddress?.address;
+  return typeof address === 'string' ? address.trim().toLowerCase() : '';
+}
+
+/** The person's own addresses: the primary one, the sign-in name and every SMTP alias. */
+function ownAddresses(me: { mail?: unknown; userPrincipalName?: unknown; proxyAddresses?: unknown } | null | undefined): Set<string> {
+  const own = new Set<string>();
+  for (const value of [me?.mail, me?.userPrincipalName]) if (typeof value === 'string' && value.trim()) own.add(value.trim().toLowerCase());
+  if (Array.isArray(me?.proxyAddresses)) {
+    for (const proxy of me.proxyAddresses) if (typeof proxy === 'string' && /^smtp:/i.test(proxy)) own.add(proxy.slice(5).trim().toLowerCase());
+  }
+  return own;
+}
+
 /**
- * Moves a message to another folder. Deleted Items is a folder like any other (it can be undone), except for a sent
- * message. Nothing goes into the recoverable items folders. The folders are compared by id, read just before.
+ * Moves a message to another folder. Deleted Items is a folder like any other (it can be undone), except for a message
+ * the person has sent: one that is not a draft and whose sender is the person, wherever it lies now (a sent message
+ * moved to Archive first is still sent). Nothing goes into the recoverable items folders. The folders are compared by
+ * id, read just before. When a lookup the checks need fails, nothing is moved; only a recoverable items folder that
+ * Graph says does not exist (404) is taken as one the destination cannot be.
  */
 export async function moveMessage(client: GraphClient, messageId: string, destination: string) {
   if (RECOVERABLE.test(destination.trim())) throw new RefusedError('recoverable_items');
   const messagePath = `/me/messages/${id(messageId, 'messageId')}`;
   const folderId = async (folder: string) =>
     (await client.get<{ id?: unknown }>(`/me/mailFolders/${id(folder, 'folder')}`, { $select: 'id' })).data?.id;
-  const [message, target, deletedItems, sentItems, recoverable] = await Promise.all([
-    client.get<{ parentFolderId?: unknown }>(messagePath, { $select: 'id,parentFolderId' }).then(r => r.data),
+  const [message, me, target, deletedItems, sentItems, recoverable] = await Promise.all([
+    client
+      .get<{ parentFolderId?: unknown; isDraft?: unknown; from?: unknown; sender?: unknown }>(messagePath, { $select: 'id,parentFolderId,isDraft,from,sender' })
+      .then(r => r.data),
+    client.get<{ mail?: unknown; userPrincipalName?: unknown; proxyAddresses?: unknown }>('/me', { $select: 'mail,userPrincipalName,proxyAddresses' }).then(r => r.data),
     folderId(destination),
     folderId('deleteditems'),
     folderId('sentitems'),
-    folderId('recoverableitemsdeletions').catch(() => undefined),
+    folderId('recoverableitemsdeletions').catch((error: unknown) => {
+      if (error instanceof GraphHttpError && error.status === 404) return null;
+      throw error;
+    }),
   ]);
-  if (typeof target !== 'string') throw new RefusedError('invalid_value');
-  if (recoverable !== undefined && target === recoverable) throw new RefusedError('recoverable_items');
-  if (target === deletedItems && message?.parentFolderId === sentItems) throw new RefusedError('sent_message_to_deleted_items');
+  if (typeof target !== 'string' || typeof deletedItems !== 'string' || typeof sentItems !== 'string') throw new RefusedError('invalid_value');
+  if (recoverable !== null && typeof recoverable !== 'string') throw new RefusedError('invalid_value');
+  if (recoverable !== null && target === recoverable) throw new RefusedError('recoverable_items');
+  if (target === deletedItems) {
+    const own = ownAddresses(me);
+    // A message is the person's own sent one unless Graph says it is a draft: a missing isDraft counts as sent.
+    const sentByPerson = message?.isDraft !== true && (own.has(addressOf(message?.from)) || own.has(addressOf(message?.sender)));
+    if (sentByPerson || message?.parentFolderId === sentItems) throw new RefusedError('sent_message_to_deleted_items');
+  }
   return (await client.post(`${messagePath}/move`, { destinationId: target })).data;
 }
 

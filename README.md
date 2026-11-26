@@ -385,8 +385,10 @@ const mail = await gateway.callTool('search_mail', { query: 'tilbud', top: 10 })
 Refused before anything is sent, with a fixed text (`REFUSAL_TEXT`):
 changing or deleting a message that is not a draft, deleting an event that
 has attendees or that the person does not organise (cancel or decline it
-instead), moving a sent message to Deleted Items, moving anything into the
-recoverable items folders. Uploads never replace an existing file of the
+instead), moving a message the person has sent (not a draft, sent by the
+person) to Deleted Items wherever it lies, moving anything into the
+recoverable items folders. When a lookup these checks need fails, nothing is
+moved. Uploads never replace an existing file of the
 same name (`upload_file_version` makes a new version instead, and the earlier
 ones stay in the version history). `read_file_text` and
 `get_attachment_text` read text files of at most 1 MB; a file's content is
@@ -412,7 +414,10 @@ besides `openid`, `profile`, `email` and `offline_access`):
 | `Files.ReadWrite.All` | the file reads (`Files.Read.All`) and changes, in OneDrive and SharePoint |
 | `Sites.Read.All` | `search_sites`, `list_site_drives` |
 
-`Files.ReadWrite.All` and `Sites.Read.All` need an administrator's consent.
+Microsoft marks `Files.ReadWrite.All` and `Sites.Read.All` as not needing an
+administrator's consent, but the organisation's own consent policy can still
+require one (many organisations let users consent only to verified
+publishers, or to nothing); an administrator can consent for everyone once.
 Sign the person in at the customer's own tenant
 (`https://login.microsoftonline.com/{tenant-id}/oauth2/v2.0/authorize`), not
 at `common`.

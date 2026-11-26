@@ -260,14 +260,15 @@ export const personalTools: readonly PersonalTool[] = [
     name: 'move_message',
     title: 'Move a message',
     description:
-      'Move a message to another folder, Deleted Items included (it can be moved back). A sent message is not moved to Deleted Items.',
+      'Move a message to another folder, Deleted Items included (it can be moved back). A message the person has sent is not moved to Deleted Items, wherever it lies.',
     riskLevel: 'write',
     enabledByDefault: false,
     inputSchema: object({ messageId, destination: str('A folder id or a well-known name such as "inbox", "archive", "deleteditems".') }, [
       'messageId',
       'destination',
     ]),
-    upstream: [GET('/me/messages/{message}'), GET('/me/mailFolders/{folder}'), POST('/me/messages/{message}/move')],
+    // GET /me reads the person's own addresses (User.Read, which every sign-in has) to tell a sent message.
+    upstream: [GET('/me/messages/{message}'), GET('/me'), GET('/me/mailFolders/{folder}'), POST('/me/messages/{message}/move')],
     permission: 'Mail.ReadWrite',
   },
   {

@@ -13,7 +13,11 @@ const DOWNLOAD = 'https://example-my.sharepoint.com/personal/download.aspx?tempa
 
 interface Mailbox {
   /** The message the mock answers for /me/messages/{id}. */
-  message?: { isDraft?: boolean; parentFolderId?: string };
+  message?: { isDraft?: boolean; parentFolderId?: string; from?: unknown; sender?: unknown };
+  /** Messages by id, kept up to date by a move (Graph gives a moved message a new id). */
+  messages?: Record<string, Record<string, unknown>>;
+  /** A mail folder lookup that fails with this status. */
+  failFolder?: { name: string; status: number };
   /** The event the mock answers for /me/events/{id}. */
   event?: { isOrganizer?: boolean; attendees?: unknown[] };
   /** The drive item the mock answers. */
@@ -33,10 +37,26 @@ function mailbox(state: Mailbox = {}) {
     if (req.method === 'GET' && path.endsWith('/content')) return new Response(null, { status: 302, headers: { location: state.download ?? DOWNLOAD } });
     if (req.method === 'GET' && /^\/me\/mailFolders\/[^/]+$/.test(path)) {
       const asked = path.split('/').pop()!;
+      if (state.failFolder?.name === asked) return Response.json({ error: { code: 'ServiceUnavailable' } }, { status: state.failFolder.status });
       return Response.json({ id: state.folders?.[asked] ?? `folder-${asked}` });
     }
     if (req.method === 'GET' && /^\/me\/messages\/[^/]+$/.test(path)) {
+      const asked = path.split('/').pop()!;
+      if (state.messages) {
+        const found = state.messages[asked];
+        return found ? Response.json(found) : Response.json({ error: { code: 'ErrorItemNotFound' } }, { status: 404 });
+      }
       return Response.json({ id: 'm-1', isDraft: true, parentFolderId: 'folder-inbox', ...state.message });
+    }
+    if (req.method === 'POST' && /^\/me\/messages\/[^/]+\/move$/.test(path) && state.messages) {
+      const old = path.split('/')[3]!;
+      const moved = { ...state.messages[old]!, id: `${old}-moved`, parentFolderId: 'folder-archive' };
+      delete state.messages[old];
+      state.messages[moved.id as string] = moved;
+      return Response.json(moved, { status: 201 });
+    }
+    if (req.method === 'GET' && path === '/me') {
+      return Response.json({ id: 'me-1', mail: 'person@example.com', userPrincipalName: 'person@example.com', proxyAddresses: ['SMTP:person@example.com', 'smtp:alias@example.com'] });
     }
     if (req.method === 'GET' && /^\/me\/events\/[^/]+$/.test(path)) return Response.json({ id: 'e-1', isOrganizer: true, attendees: [], ...state.event });
     if (req.method === 'GET' && /\/attachments\/[^/]+$/.test(path)) {
@@ -223,6 +243,43 @@ describe('the fixed refusals', () => {
     const sentById = delegated({ message: { parentFolderId: 'folder-sentitems' }, folders: { 'AAMkDeleted': 'folder-deleteditems' } });
     expect(await sentById.gateway.callTool('move_message', { messageId: 'm-1', destination: 'AAMkDeleted' })).toEqual(refusal('sent_message_to_deleted_items'));
     expect(sentById.changes()).toHaveLength(0);
+  });
+
+  it('moves a sent message to Archive, and then still not to Deleted Items under the new id Graph gave it', async () => {
+    const sentMessage = {
+      id: 'm-sent',
+      isDraft: false,
+      parentFolderId: 'folder-sentitems',
+      from: { emailAddress: { address: 'Person@Example.com' } },
+      sender: { emailAddress: { address: 'person@example.com' } },
+    };
+    const box = delegated({ messages: { 'm-sent': sentMessage } });
+    const archived = await box.gateway.callTool('move_message', { messageId: 'm-sent', destination: 'archive' });
+    expect(archived.isError).toBeFalsy();
+    const newId = (archived.structuredContent as { id?: string }).id!;
+    expect(newId).toBe('m-sent-moved');
+    const before = box.changes().length;
+    expect(await box.gateway.callTool('move_message', { messageId: newId, destination: 'deleteditems' })).toEqual(refusal('sent_message_to_deleted_items'));
+    expect(box.changes()).toHaveLength(before);
+  });
+
+  it('tells a sent message by an alias of the person, and lets a received one go to Deleted Items', async () => {
+    const alias = delegated({ messages: { a: { id: 'a', isDraft: false, parentFolderId: 'folder-archive', from: { emailAddress: { address: 'alias@example.com' } } } } });
+    expect(await alias.gateway.callTool('move_message', { messageId: 'a', destination: 'deleteditems' })).toEqual(refusal('sent_message_to_deleted_items'));
+    const received = delegated({ messages: { r: { id: 'r', isDraft: false, parentFolderId: 'folder-inbox', from: { emailAddress: { address: 'kunde@example.net' } } } } });
+    expect((await received.gateway.callTool('move_message', { messageId: 'r', destination: 'deleteditems' })).isError).toBeFalsy();
+  });
+
+  it('moves nothing when a lookup the checks need fails', async () => {
+    for (const name of ['recoverableitemsdeletions', 'deleteditems', 'sentitems']) {
+      const box = delegated({ failFolder: { name, status: 503 } });
+      const result = await box.gateway.callTool('move_message', { messageId: 'm-1', destination: 'archive' });
+      expect(result.isError, name).toBe(true);
+      expect(box.changes(), name).toHaveLength(0);
+    }
+    // A recoverable items folder Graph says is not there is no folder the destination can be.
+    const missing = delegated({ failFolder: { name: 'recoverableitemsdeletions', status: 404 } });
+    expect((await missing.gateway.callTool('move_message', { messageId: 'm-1', destination: 'archive' })).isError).toBeFalsy();
   });
 
   it('deletes only an own appointment without attendees', async () => {
