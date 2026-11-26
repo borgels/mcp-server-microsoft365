@@ -445,7 +445,12 @@ const UPSTREAM: Readonly<Record<string, readonly GatewayUpstreamOperation[]>> = 
     { method: 'POST', path: '/users/{user}/assignLicense' },
   ],
   add_group_member: [...GROUP_GUARD_LOOKUPS, { method: 'POST', path: '/groups/{group}/members/$ref' }],
-  remove_group_member: [...GROUP_GUARD_LOOKUPS, { method: 'DELETE', path: '/groups/{group}/members/{user}/$ref' }],
+  remove_group_member: [
+    ...GROUP_GUARD_LOOKUPS,
+    { method: 'DELETE', path: '/groups/{group}/members/{user}/$ref' },
+    // Only after a 404: whether the user is in the group's member list, before it reads as already removed.
+    { method: 'GET', path: '/groups/{group}/members' },
+  ],
   set_usage_location: [...USER_GUARD_LOOKUPS, { method: 'PATCH', path: '/users/{user}' }],
   update_user: [...USER_GUARD_LOOKUPS, { method: 'PATCH', path: '/users/{user}' }],
   reset_password: [...USER_GUARD_LOOKUPS, { method: 'PATCH', path: '/users/{user}' }],
