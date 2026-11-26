@@ -50,6 +50,9 @@ function setup(directory: Directory, policy: Partial<ProtectionPolicy> = ENABLED
       if (req.method === 'GET' && path === '/v1.0/subscribedSkus') {
         return Response.json({ value: [{ skuId: 'sku-e3', skuPartNumber: 'SPE_E3', prepaidUnits: { enabled: 5 }, consumedUnits: 1 }] });
       }
+      if (req.method === 'POST' && path.endsWith('/authentication/temporaryAccessPassMethods')) {
+        return Response.json({ id: 'tap-2', temporaryAccessPass: 'Abcd1234Efgh' }, { status: 201 });
+      }
       if (req.method === 'GET' && path.endsWith('/authentication/temporaryAccessPassMethods')) {
         return Response.json({ value: [{ id: 'tap-1' }] });
       }
@@ -222,6 +225,8 @@ describe('every change to an existing user is guarded', () => {
     const gateway = createMicrosoft365Gateway({
       accessToken: 'graph-access-0123456789abcdef',
       policy: { enableWrites: true },
+      // Password reset and passes are on here, so for every tool it is the failed lookup that stops the change.
+      protection: { allowPasswordReset: true, allowTap: true },
       fetchImpl: async (i, init) => {
         const req = new Request(i, init);
         requests.push(req);
@@ -231,18 +236,19 @@ describe('every change to an existing user is guarded', () => {
         return new Response(null, { status: 204 });
       },
     });
-    // Password reset and passes are off in host mode unless the host turns them on: those two are refused before the
-    // lookup, with the same text.
     const result = await gateway.callTool(tool, input);
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toBe('Refused: the target is protected.');
+    // The lookup was tried: the user was resolved, and the memberships were asked for.
+    expect(requests.some(r => new URL(r.url).pathname.endsWith('/transitiveMemberOf'))).toBe(true);
     expect(requests.filter(r => r.method !== 'GET')).toHaveLength(0);
   });
 
   it.each(USER_CHANGES)('%s goes through for an ordinary user', async (tool, input) => {
     const { gateway, writes } = setup({});
-    await gateway.callTool(tool, input).catch(() => undefined);
-    // The guard did not stop it: for an ordinary user the change is attempted (the stand-in answers writes with 204).
+    const result = await gateway.callTool(tool, input);
+    expect(result.isError).toBeFalsy();
+    // The guard did not stop it: the change itself was sent (the stand-in answers writes with 204).
     expect(writes().length).toBeGreaterThan(0);
   });
 });
