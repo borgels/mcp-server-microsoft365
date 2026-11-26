@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Tests: a membership that first appears on a later page of the group's member
+  list keeps a 404 on removal an error, and the group changes write to the
+  object id the group lookup returned, not to the reference they were given.
+
 ## 0.6.1
 
 - Every change to an existing user addresses the object the protection guard

@@ -44,7 +44,9 @@ function directory(options: Options = {}) {
           if (options.members === 'error') return Response.json({ error: { message: 'unavailable' } }, { status: 503 });
           return Response.json({ value: (options.members ?? []).map(id => ({ id })) });
         }
-        if (path === `/v1.0/groups/${GROUP_ID}`) return Response.json({ id: GROUP_ID, isAssignableToRole: false });
+        if (path === `/v1.0/groups/${GROUP_ID}` || path === `/v1.0/groups/${GROUP_ID.toUpperCase()}`) {
+          return Response.json({ id: GROUP_ID, isAssignableToRole: false });
+        }
         if (path.endsWith('/authentication/temporaryAccessPassMethods')) return Response.json({ value: [{ id: 'tap-1' }] });
         // A user looked up by login name or by object id is the same object.
         if (path === `/v1.0/users/${LOGIN}` || path === `/v1.0/users/${USER_ID}`) {
@@ -134,6 +136,52 @@ describe('a change addresses the object the guard checked', () => {
     const { gateway } = directory({ removeStatus: 404, members: 'error' });
     await expect(gateway.callTool('remove_group_member', { groupId: GROUP_ID, userId: LOGIN })).rejects.toThrow();
   });
+
+  it('finds a membership on a later page of the member list, and then a 404 on removal is an error', async () => {
+    const pages: string[] = [];
+    const gateway = createMicrosoft365Gateway({
+      accessToken: 'graph-token',
+      baseUrl: BASE,
+      protection: PERMISSIVE,
+      fetchImpl: async (input, init) => {
+        const req = new Request(input, init);
+        const url = new URL(req.url);
+        const path = decodeURIComponent(url.pathname);
+        if (req.method === 'DELETE') return Response.json({ error: { message: 'not found' } }, { status: 404 });
+        if (path.endsWith('/transitiveMemberOf') || path.endsWith('/roleAssignments')) return Response.json({ value: [] });
+        if (path === `/v1.0/groups/${GROUP_ID}/members`) {
+          const page = url.searchParams.get('page') ?? '1';
+          pages.push(page);
+          if (page === '1') {
+            return Response.json({
+              value: [{ id: 'dddddddd-1111-4222-8333-444444444444' }],
+              '@odata.nextLink': `${BASE}/groups/${GROUP_ID}/members?page=2`,
+            });
+          }
+          return Response.json({ value: [{ id: USER_ID }] });
+        }
+        if (path === `/v1.0/groups/${GROUP_ID}`) return Response.json({ id: GROUP_ID, isAssignableToRole: false });
+        return Response.json({ id: USER_ID, userPrincipalName: LOGIN });
+      },
+    });
+    await expect(gateway.callTool('remove_group_member', { groupId: GROUP_ID, userId: LOGIN })).rejects.toThrow(/404/);
+    expect(pages).toEqual(['1', '2']);
+  });
+
+  it.each(['add_group_member', 'remove_group_member'])(
+    '%s writes to the group id the lookup returned, not to the reference it was given',
+    async tool => {
+      const given = GROUP_ID.toUpperCase();
+      const { gateway, writes } = directory({ members: [USER_ID] });
+      // The stand-in answers the group under the reference as given, with its own object id.
+      const result = await gateway.callTool(tool, { groupId: given, userId: LOGIN });
+      expect(result.isError).toBeFalsy();
+      const paths = writes().map(r => decodeURIComponent(new URL(r.url).pathname));
+      expect(paths.length).toBe(1);
+      expect(paths[0]!.startsWith(`/v1.0/groups/${GROUP_ID}/members`), paths[0]).toBe(true);
+      expect(paths[0]).not.toContain(given);
+    },
+  );
 
   it('in host mode, a removal that gave 404 for a user still in the group is an error, not a success', async () => {
     const gateway = createMicrosoft365Gateway({
