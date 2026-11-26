@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.1
+
+- `delete_draft` and `delete_event` are `write`, not `destructive`: each
+  deletes only what has had no effect outside the person's own mailbox or
+  calendar (a draft never sent, an appointment without attendees), checked
+  just before. A host that keeps destructive tools from every role can now let
+  a role delete its own drafts.
+- Test: a move to the recoverable items folder given by its own id is refused.
+
 ## 0.7.0
 
 - The person's own mail, calendar and files through `./gateway`, with one

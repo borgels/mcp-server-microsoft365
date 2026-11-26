@@ -277,6 +277,19 @@ describe('the fixed refusals', () => {
     expect((await received.gateway.callTool('move_message', { messageId: 'r', destination: 'deleteditems' })).isError).toBeFalsy();
   });
 
+  it('moves nothing into the recoverable items when the destination is that folder by its own id', async () => {
+    const box = delegated({ folders: { 'AAMkRecoverable': 'id-recoverable', recoverableitemsdeletions: 'id-recoverable' } });
+    expect(await box.gateway.callTool('move_message', { messageId: 'm-1', destination: 'AAMkRecoverable' })).toEqual(refusal('recoverable_items'));
+    expect(box.changes()).toHaveLength(0);
+  });
+
+  it('deletes only what has had no effect outside: neither delete is destructive', () => {
+    for (const name of ['delete_draft', 'delete_event']) {
+      expect(personalCatalog.find(entry => entry.name === name)!.riskLevel, name).toBe('write');
+    }
+    expect(personalCatalog.filter(entry => entry.riskLevel === 'destructive')).toEqual([]);
+  });
+
   it('moves nothing to Deleted Items when it is not known who sent the message', async () => {
     const cases: Array<[string, Mailbox]> = [
       ['an empty profile', { profile: {}, messages: { x: { id: 'x', isDraft: false, from: { emailAddress: { address: 'kunde@example.net' } } } } }],
