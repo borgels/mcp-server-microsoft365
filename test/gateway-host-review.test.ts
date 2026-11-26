@@ -145,11 +145,14 @@ describe('the catalog lists every request a tool makes', () => {
 
   const pattern = (path: string) => new RegExp(`^${path.replace(/[.*+?^$()|[\]\\]/g, '\\$&').replace(/\\\{[a-z]+\\\}|\{[a-z]+\}/gi, '[^/]+')}$`);
 
-  it('has an input here for every tool', () => {
-    expect(Object.keys(inputs).sort()).toEqual(microsoft365ToolCatalog.map(t => t.name).sort());
+  // The directory tools; the personal tools have their own run (personal.test.ts).
+  const directoryCatalog = microsoft365ToolCatalog.filter(entry => entry.access === 'application');
+
+  it('has an input here for every directory tool', () => {
+    expect(Object.keys(inputs).sort()).toEqual(directoryCatalog.map(t => t.name).sort());
   });
 
-  for (const entry of microsoft365ToolCatalog) {
+  for (const entry of directoryCatalog) {
     it(`${entry.name}: every recorded request is in its upstream list`, async () => {
       // The env gateway with every guard open, so each tool runs its whole path.
       const requests: Request[] = [];

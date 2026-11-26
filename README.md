@@ -354,8 +354,68 @@ const users = await gateway.callTool('list_users', { top: 50 });
   `GET /users/{id}/licenseDetails`).
 - **`microsoft365ToolCatalog`** is a deeply frozen list of every tool with its
   `upstream` Graph requests (method and path template, the protection
-  guard's lookups included) and `broad` (false for all). A test holds it
-  against the requests each tool actually makes.
+  guard's lookups included), `broad` (false for all), `access`
+  (`application` or `delegated`) and, for a delegated tool, the one delegated
+  `permission` it needs. A test holds it against the requests each tool
+  actually makes.
+
+### The person's own mail, calendar and files (delegated, host mode)
+
+With `policy.access: 'delegated'` the host gives one person's own access
+token (authorization code, then refresh, both done by the host), and the
+instance offers only the personal tools. Every one of them works on `/me`,
+a drive or SharePoint site the person reaches, or Microsoft Search; none
+takes a user or a mailbox, so Microsoft Graph decides whose data it is.
+
+```ts
+const gateway = createMicrosoft365Gateway({
+  accessToken: await tokens.personAccessToken(personId),
+  policy: { access: 'delegated', enableWrites: true },
+});
+const mail = await gateway.callTool('search_mail', { query: 'tilbud', top: 10 });
+```
+
+| Area | Read | Change |
+| --- | --- | --- |
+| Profile | `get_my_profile` | |
+| Mail | `search_mail`, `get_message`, `get_conversation`, `list_mail_folders`, `list_attachments`, `get_attachment_text`, `get_automatic_replies` | drafts: `create_draft`, `update_draft`, `create_reply_draft`, `create_forward_draft`, `delete_draft`; organising: `move_message`, `mark_message`; sending: `send_draft`, `send_mail`, `reply`, `forward`; `set_automatic_replies` |
+| Calendar | `list_calendars`, `list_events`, `get_event`, `get_schedule`, `find_meeting_times` | `create_event`, `update_event`, `respond_to_event`, `cancel_event`, `delete_event` |
+| Files | `search_files`, `list_folder`, `get_file`, `read_file_text`, `search_sites`, `list_site_drives` | `upload_file`, `upload_file_version`, `create_folder`, `move_file` |
+
+Refused before anything is sent, with a fixed text (`REFUSAL_TEXT`):
+changing or deleting a message that is not a draft, deleting an event that
+has attendees or that the person does not organise (cancel or decline it
+instead), moving a sent message to Deleted Items, moving anything into the
+recoverable items folders. Uploads never replace an existing file of the
+same name (`upload_file_version` makes a new version instead, and the earlier
+ones stay in the version history). `read_file_text` and
+`get_attachment_text` read text files of at most 1 MB; a file's content is
+fetched at the short-lived download address Graph redirects to, which must
+be on `*.sharepoint.com`, without the access token.
+
+Not tools, on purpose: inbox rules and forwarding settings, mailbox settings
+other than the automatic reply, permanent deletion of mail, deletion of sent
+mail, deletion of files and versions, sharing links and permissions, and
+members of sites, teams and groups.
+
+Delegated permissions for an app registration (`MICROSOFT365_DELEGATED_PERMISSIONS`,
+besides `openid`, `profile`, `email` and `offline_access`):
+
+| Permission | Tools |
+| --- | --- |
+| `User.Read` | `get_my_profile` |
+| `Mail.ReadWrite` | the mail reads (`Mail.Read`), drafts, `move_message`, `mark_message` |
+| `Mail.Send` | `send_draft`, `send_mail`, `reply`, `forward` |
+| `MailboxSettings.ReadWrite` | `get_automatic_replies`, `set_automatic_replies` |
+| `Calendars.ReadWrite` | the calendar reads (`Calendars.Read`) and changes |
+| `Calendars.Read.Shared` | `find_meeting_times` |
+| `Files.ReadWrite.All` | the file reads (`Files.Read.All`) and changes, in OneDrive and SharePoint |
+| `Sites.Read.All` | `search_sites`, `list_site_drives` |
+
+`Files.ReadWrite.All` and `Sites.Read.All` need an administrator's consent.
+Sign the person in at the customer's own tenant
+(`https://login.microsoftonline.com/{tenant-id}/oauth2/v2.0/authorize`), not
+at `common`.
 
 ## Live smoke test
 
