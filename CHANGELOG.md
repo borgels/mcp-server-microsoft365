@@ -9,15 +9,16 @@
   only the directory tools, as before. Every personal tool works on `/me`, a
   drive or site the person reaches, or Microsoft Search; none takes a user or
   a mailbox (#49).
-- Each personal tool names its Graph requests and the one delegated
-  permission it needs in `microsoft365ToolCatalog` (`access`, `permission`);
+- Each personal tool names its Graph requests and the delegated permissions
+  they need in `microsoft365ToolCatalog` (`access`, `permissions`);
   `MICROSOFT365_DELEGATED_PERMISSIONS` is the list for an app registration.
 - Refused before anything is sent, with fixed texts (`REFUSAL_TEXT`):
   changing or deleting a message that is not a draft, deleting an event with
   attendees or one the person does not organise, moving a message the person
   has sent (not a draft, sender the person) to Deleted Items wherever it lies,
-  moving anything into the recoverable items folders; a failed lookup moves
-  nothing. No tool
+  moving anything into the recoverable items folders. Moving to Deleted Items
+  fails closed: without the person's addresses, the message's isDraft and a
+  sender address, or after a failed lookup, nothing is moved. No tool
   for inbox rules, forwarding settings, other mailbox settings, permanent
   deletion, deletion of sent mail, files or versions, sharing or members.
 - `GraphClient.upload`, `redirectLocation` and `downloadPreauthenticated`

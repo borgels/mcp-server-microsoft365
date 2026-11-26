@@ -17,6 +17,7 @@ export type RefusalCode =
   | 'not_own_appointment'
   | 'sent_message_to_deleted_items'
   | 'recoverable_items'
+  | 'sender_unverified'
   | 'query_with_unread'
   | 'no_change'
   | 'content_missing'
@@ -39,6 +40,7 @@ export const REFUSAL_TEXT: Readonly<Record<RefusalCode, string>> = {
   not_own_appointment: 'Refused: only an appointment without attendees that the person organises can be deleted.',
   sent_message_to_deleted_items: 'Refused: a sent message is not moved to Deleted Items.',
   recoverable_items: 'Refused: nothing is moved into the recoverable items folders.',
+  sender_unverified: 'Refused: whether the person sent the message could not be verified, so it is not moved to Deleted Items.',
   query_with_unread: 'Refused: unreadOnly cannot be combined with query.',
   no_change: 'Refused: give at least one field to change.',
   content_missing: 'Refused: give the content as text or as contentBase64, not both and not neither.',
@@ -363,10 +365,13 @@ export async function moveMessage(client: GraphClient, messageId: string, destin
   if (recoverable !== null && typeof recoverable !== 'string') throw new RefusedError('invalid_value');
   if (recoverable !== null && target === recoverable) throw new RefusedError('recoverable_items');
   if (target === deletedItems) {
+    // Fail closed: to Deleted Items only when it is known who sent the message. That takes the person's profile with at
+    // least one address, the message's isDraft and at least one sender address; without all three nothing is moved.
     const own = ownAddresses(me);
-    // A message is the person's own sent one unless Graph says it is a draft: a missing isDraft counts as sent.
-    const sentByPerson = message?.isDraft !== true && (own.has(addressOf(message?.from)) || own.has(addressOf(message?.sender)));
-    if (sentByPerson || message?.parentFolderId === sentItems) throw new RefusedError('sent_message_to_deleted_items');
+    const senders = [addressOf(message?.from), addressOf(message?.sender)].filter(address => address !== '');
+    if (own.size === 0 || typeof message?.isDraft !== 'boolean' || senders.length === 0) throw new RefusedError('sender_unverified');
+    const sentByPerson = !message.isDraft && senders.some(address => own.has(address));
+    if (sentByPerson || message.parentFolderId === sentItems) throw new RefusedError('sent_message_to_deleted_items');
   }
   return (await client.post(`${messagePath}/move`, { destinationId: target })).data;
 }

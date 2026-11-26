@@ -1,7 +1,7 @@
 /**
  * The gateway tools on the signed-in person's own mail, calendar and files: delegated access only.
  *
- * Each tool names the Graph requests it may make and the one delegated permission they need (the least one Microsoft
+ * Each tool names the Graph requests it may make and the delegated permissions they need (the least ones Microsoft
  * documents for them). Every request is on `/me`, a drive or site the person reaches, or Microsoft Search: no tool takes
  * a user or a mailbox, so Microsoft Graph decides whose data it is.
  *
@@ -48,7 +48,8 @@ export function permissionCovers(granted: string, needed: string): boolean {
 
 export interface PersonalTool extends GatewayToolDefinition {
   readonly upstream: readonly GatewayUpstreamOperation[];
-  readonly permission: DelegatedPermission;
+  /** The delegated permissions the tool's requests need, the main one first. */
+  readonly permissions: readonly DelegatedPermission[];
 }
 
 const str = (description: string): GatewayJsonObject => ({ type: 'string', description });
@@ -121,7 +122,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: true,
     inputSchema: object({}),
     upstream: [GET('/me')],
-    permission: 'User.Read',
+    permissions: ['User.Read'],
   },
   // ------------------------------------------------------------------------------------------------- mail reads
   {
@@ -142,7 +143,7 @@ export const personalTools: readonly PersonalTool[] = [
       skip: { type: 'number', minimum: 0, maximum: 1000, description: 'Skip this many (not with query).' },
     }),
     upstream: [GET('/me/messages'), GET('/me/mailFolders/{folder}/messages')],
-    permission: 'Mail.Read',
+    permissions: ['Mail.Read'],
   },
   {
     name: 'get_message',
@@ -152,7 +153,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: true,
     inputSchema: object({ messageId, bodyType }, ['messageId']),
     upstream: [GET('/me/messages/{message}')],
-    permission: 'Mail.Read',
+    permissions: ['Mail.Read'],
   },
   {
     name: 'get_conversation',
@@ -162,7 +163,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: true,
     inputSchema: object({ conversationId: str('The conversationId of a message.'), top: top(50) }, ['conversationId']),
     upstream: [GET('/me/messages')],
-    permission: 'Mail.Read',
+    permissions: ['Mail.Read'],
   },
   {
     name: 'list_mail_folders',
@@ -172,7 +173,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: true,
     inputSchema: object({ parentFolderId: str('A folder id, to list the folders inside it.') }),
     upstream: [GET('/me/mailFolders'), GET('/me/mailFolders/{folder}/childFolders')],
-    permission: 'Mail.Read',
+    permissions: ['Mail.Read'],
   },
   {
     name: 'list_attachments',
@@ -182,7 +183,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: true,
     inputSchema: object({ messageId }, ['messageId']),
     upstream: [GET('/me/messages/{message}/attachments')],
-    permission: 'Mail.Read',
+    permissions: ['Mail.Read'],
   },
   {
     name: 'get_attachment_text',
@@ -192,7 +193,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: true,
     inputSchema: object({ messageId, attachmentId: str('The attachment id (from list_attachments).') }, ['messageId', 'attachmentId']),
     upstream: [GET('/me/messages/{message}/attachments/{attachment}')],
-    permission: 'Mail.Read',
+    permissions: ['Mail.Read'],
   },
   {
     name: 'get_automatic_replies',
@@ -202,7 +203,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: true,
     inputSchema: object({}),
     upstream: [GET('/me/mailboxSettings/automaticRepliesSetting')],
-    permission: 'MailboxSettings.Read',
+    permissions: ['MailboxSettings.Read'],
   },
   // ------------------------------------------------------------------------------------------------ mail drafts
   {
@@ -213,7 +214,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: false,
     inputSchema: object(draftFields),
     upstream: [POST('/me/messages')],
-    permission: 'Mail.ReadWrite',
+    permissions: ['Mail.ReadWrite'],
   },
   {
     name: 'update_draft',
@@ -223,7 +224,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: false,
     inputSchema: object({ messageId, ...draftFields }, ['messageId']),
     upstream: [GET('/me/messages/{message}'), PATCH('/me/messages/{message}')],
-    permission: 'Mail.ReadWrite',
+    permissions: ['Mail.ReadWrite'],
   },
   {
     name: 'create_reply_draft',
@@ -233,7 +234,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: false,
     inputSchema: object({ messageId, comment: str('The text of the reply.'), replyAll: { type: 'boolean' } }, ['messageId']),
     upstream: [POST('/me/messages/{message}/createReply'), POST('/me/messages/{message}/createReplyAll')],
-    permission: 'Mail.ReadWrite',
+    permissions: ['Mail.ReadWrite'],
   },
   {
     name: 'create_forward_draft',
@@ -243,7 +244,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: false,
     inputSchema: object({ messageId, to: addresses('Recipients, as e-mail addresses.'), comment: str('A text above the forwarded message.') }, ['messageId']),
     upstream: [POST('/me/messages/{message}/createForward')],
-    permission: 'Mail.ReadWrite',
+    permissions: ['Mail.ReadWrite'],
   },
   {
     name: 'delete_draft',
@@ -253,7 +254,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: false,
     inputSchema: object({ messageId }, ['messageId']),
     upstream: [GET('/me/messages/{message}'), DELETE('/me/messages/{message}')],
-    permission: 'Mail.ReadWrite',
+    permissions: ['Mail.ReadWrite'],
   },
   // ------------------------------------------------------------------------------------------- mail organising
   {
@@ -269,7 +270,7 @@ export const personalTools: readonly PersonalTool[] = [
     ]),
     // GET /me reads the person's own addresses (User.Read, which every sign-in has) to tell a sent message.
     upstream: [GET('/me/messages/{message}'), GET('/me'), GET('/me/mailFolders/{folder}'), POST('/me/messages/{message}/move')],
-    permission: 'Mail.ReadWrite',
+    permissions: ['Mail.ReadWrite', 'User.Read'],
   },
   {
     name: 'mark_message',
@@ -287,7 +288,7 @@ export const personalTools: readonly PersonalTool[] = [
       ['messageId'],
     ),
     upstream: [PATCH('/me/messages/{message}')],
-    permission: 'Mail.ReadWrite',
+    permissions: ['Mail.ReadWrite'],
   },
   // ----------------------------------------------------------------------------------------------- mail sending
   {
@@ -298,7 +299,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: false,
     inputSchema: object({ messageId }, ['messageId']),
     upstream: [POST('/me/messages/{message}/send')],
-    permission: 'Mail.Send',
+    permissions: ['Mail.Send'],
   },
   {
     name: 'send_mail',
@@ -308,7 +309,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: false,
     inputSchema: object(draftFields, ['subject', 'body', 'to']),
     upstream: [POST('/me/sendMail')],
-    permission: 'Mail.Send',
+    permissions: ['Mail.Send'],
   },
   {
     name: 'reply',
@@ -318,7 +319,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: false,
     inputSchema: object({ messageId, comment: str('The text of the reply.'), replyAll: { type: 'boolean' } }, ['messageId', 'comment']),
     upstream: [POST('/me/messages/{message}/reply'), POST('/me/messages/{message}/replyAll')],
-    permission: 'Mail.Send',
+    permissions: ['Mail.Send'],
   },
   {
     name: 'forward',
@@ -331,7 +332,7 @@ export const personalTools: readonly PersonalTool[] = [
       'to',
     ]),
     upstream: [POST('/me/messages/{message}/forward')],
-    permission: 'Mail.Send',
+    permissions: ['Mail.Send'],
   },
   {
     name: 'set_automatic_replies',
@@ -353,7 +354,7 @@ export const personalTools: readonly PersonalTool[] = [
       ['status'],
     ),
     upstream: [PATCH('/me/mailboxSettings')],
-    permission: 'MailboxSettings.ReadWrite',
+    permissions: ['MailboxSettings.ReadWrite'],
   },
   // --------------------------------------------------------------------------------------------- calendar reads
   {
@@ -364,7 +365,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: true,
     inputSchema: object({}),
     upstream: [GET('/me/calendars')],
-    permission: 'Calendars.Read',
+    permissions: ['Calendars.Read'],
   },
   {
     name: 'list_events',
@@ -377,7 +378,7 @@ export const personalTools: readonly PersonalTool[] = [
       ['start', 'end'],
     ),
     upstream: [GET('/me/calendarView'), GET('/me/calendars/{calendar}/calendarView')],
-    permission: 'Calendars.Read',
+    permissions: ['Calendars.Read'],
   },
   {
     name: 'get_event',
@@ -387,7 +388,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: true,
     inputSchema: object({ eventId, timeZone }, ['eventId']),
     upstream: [GET('/me/events/{event}')],
-    permission: 'Calendars.Read',
+    permissions: ['Calendars.Read'],
   },
   {
     name: 'get_schedule',
@@ -406,7 +407,7 @@ export const personalTools: readonly PersonalTool[] = [
       ['people', 'start', 'end'],
     ),
     upstream: [POST('/me/calendar/getSchedule')],
-    permission: 'Calendars.Read',
+    permissions: ['Calendars.Read'],
   },
   {
     name: 'find_meeting_times',
@@ -426,7 +427,7 @@ export const personalTools: readonly PersonalTool[] = [
       ['attendees', 'durationMinutes'],
     ),
     upstream: [POST('/me/findMeetingTimes')],
-    permission: 'Calendars.Read.Shared',
+    permissions: ['Calendars.Read.Shared'],
   },
   // -------------------------------------------------------------------------------------------- calendar changes
   {
@@ -442,7 +443,7 @@ export const personalTools: readonly PersonalTool[] = [
       'end',
     ]),
     upstream: [POST('/me/events'), POST('/me/calendars/{calendar}/events')],
-    permission: 'Calendars.ReadWrite',
+    permissions: ['Calendars.ReadWrite'],
   },
   {
     name: 'update_event',
@@ -452,7 +453,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: false,
     inputSchema: object({ eventId, ...eventFields }, ['eventId']),
     upstream: [PATCH('/me/events/{event}')],
-    permission: 'Calendars.ReadWrite',
+    permissions: ['Calendars.ReadWrite'],
   },
   {
     name: 'respond_to_event',
@@ -474,7 +475,7 @@ export const personalTools: readonly PersonalTool[] = [
       POST('/me/events/{event}/decline'),
       POST('/me/events/{event}/tentativelyAccept'),
     ],
-    permission: 'Calendars.ReadWrite',
+    permissions: ['Calendars.ReadWrite'],
   },
   {
     name: 'cancel_event',
@@ -484,7 +485,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: false,
     inputSchema: object({ eventId, comment: str('A note to the attendees.') }, ['eventId']),
     upstream: [POST('/me/events/{event}/cancel')],
-    permission: 'Calendars.ReadWrite',
+    permissions: ['Calendars.ReadWrite'],
   },
   {
     name: 'delete_event',
@@ -495,7 +496,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: false,
     inputSchema: object({ eventId }, ['eventId']),
     upstream: [GET('/me/events/{event}'), DELETE('/me/events/{event}')],
-    permission: 'Calendars.ReadWrite',
+    permissions: ['Calendars.ReadWrite'],
   },
   // ------------------------------------------------------------------------------------------------ file reads
   {
@@ -509,7 +510,7 @@ export const personalTools: readonly PersonalTool[] = [
       ['query'],
     ),
     upstream: [POST('/search/query')],
-    permission: 'Files.Read.All',
+    permissions: ['Files.Read.All'],
   },
   {
     name: 'list_folder',
@@ -524,7 +525,7 @@ export const personalTools: readonly PersonalTool[] = [
       GET('/drives/{drive}/root/children'),
       GET('/drives/{drive}/items/{item}/children'),
     ],
-    permission: 'Files.Read.All',
+    permissions: ['Files.Read.All'],
   },
   {
     name: 'get_file',
@@ -534,7 +535,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: true,
     inputSchema: object({ driveId, itemId }, ['itemId']),
     upstream: [GET('/me/drive/items/{item}'), GET('/drives/{drive}/items/{item}')],
-    permission: 'Files.Read.All',
+    permissions: ['Files.Read.All'],
   },
   {
     name: 'read_file_text',
@@ -549,7 +550,7 @@ export const personalTools: readonly PersonalTool[] = [
       GET('/drives/{drive}/items/{item}'),
       GET('/drives/{drive}/items/{item}/content'),
     ],
-    permission: 'Files.Read.All',
+    permissions: ['Files.Read.All'],
   },
   {
     name: 'search_sites',
@@ -559,7 +560,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: true,
     inputSchema: object({ query: str('Words in the site name.') }, ['query']),
     upstream: [GET('/sites')],
-    permission: 'Sites.Read.All',
+    permissions: ['Sites.Read.All'],
   },
   {
     name: 'list_site_drives',
@@ -569,7 +570,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: true,
     inputSchema: object({ siteId: str('The site id (from search_sites).') }, ['siteId']),
     upstream: [GET('/sites/{site}/drives')],
-    permission: 'Sites.Read.All',
+    permissions: ['Sites.Read.All'],
   },
   // ---------------------------------------------------------------------------------------------- file changes
   {
@@ -588,7 +589,7 @@ export const personalTools: readonly PersonalTool[] = [
       PUT('/drives/{drive}/root:/{name}:/content'),
       PUT('/drives/{drive}/items/{parent}:/{name}:/content'),
     ],
-    permission: 'Files.ReadWrite.All',
+    permissions: ['Files.ReadWrite.All'],
   },
   {
     name: 'upload_file_version',
@@ -598,7 +599,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: false,
     inputSchema: object({ driveId, itemId, ...content }, ['itemId']),
     upstream: [PUT('/me/drive/items/{item}/content'), PUT('/drives/{drive}/items/{item}/content')],
-    permission: 'Files.ReadWrite.All',
+    permissions: ['Files.ReadWrite.All'],
   },
   {
     name: 'create_folder',
@@ -613,7 +614,7 @@ export const personalTools: readonly PersonalTool[] = [
       POST('/drives/{drive}/root/children'),
       POST('/drives/{drive}/items/{parent}/children'),
     ],
-    permission: 'Files.ReadWrite.All',
+    permissions: ['Files.ReadWrite.All'],
   },
   {
     name: 'move_file',
@@ -623,7 +624,7 @@ export const personalTools: readonly PersonalTool[] = [
     enabledByDefault: false,
     inputSchema: object({ driveId, itemId, newName: str('The new name.'), newParentId: str('The id of the folder to move it to.') }, ['itemId']),
     upstream: [PATCH('/me/drive/items/{item}'), PATCH('/drives/{drive}/items/{item}')],
-    permission: 'Files.ReadWrite.All',
+    permissions: ['Files.ReadWrite.All'],
   },
 ];
 

@@ -16,6 +16,8 @@ interface Mailbox {
   message?: { isDraft?: boolean; parentFolderId?: string; from?: unknown; sender?: unknown };
   /** Messages by id, kept up to date by a move (Graph gives a moved message a new id). */
   messages?: Record<string, Record<string, unknown>>;
+  /** What GET /me answers instead of the person's profile. */
+  profile?: Record<string, unknown>;
   /** A mail folder lookup that fails with this status. */
   failFolder?: { name: string; status: number };
   /** The event the mock answers for /me/events/{id}. */
@@ -46,7 +48,7 @@ function mailbox(state: Mailbox = {}) {
         const found = state.messages[asked];
         return found ? Response.json(found) : Response.json({ error: { code: 'ErrorItemNotFound' } }, { status: 404 });
       }
-      return Response.json({ id: 'm-1', isDraft: true, parentFolderId: 'folder-inbox', ...state.message });
+      return Response.json({ id: 'm-1', isDraft: true, parentFolderId: 'folder-inbox', from: { emailAddress: { address: 'kunde@example.net' } }, ...state.message });
     }
     if (req.method === 'POST' && /^\/me\/messages\/[^/]+\/move$/.test(path) && state.messages) {
       const old = path.split('/')[3]!;
@@ -56,6 +58,7 @@ function mailbox(state: Mailbox = {}) {
       return Response.json(moved, { status: 201 });
     }
     if (req.method === 'GET' && path === '/me') {
+      if (state.profile) return Response.json(state.profile);
       return Response.json({ id: 'me-1', mail: 'person@example.com', userPrincipalName: 'person@example.com', proxyAddresses: ['SMTP:person@example.com', 'smtp:alias@example.com'] });
     }
     if (req.method === 'GET' && /^\/me\/events\/[^/]+$/.test(path)) return Response.json({ id: 'e-1', isOrganizer: true, attendees: [], ...state.event });
@@ -144,14 +147,18 @@ describe('the personal tools', () => {
     expect(Object.keys(inputs).sort()).toEqual(personalCatalog.map(entry => entry.name).sort());
   });
 
-  it('each name one delegated permission, covered by the list an app registration is given; every listed one is used', () => {
+  it('each name their delegated permissions, covered by the list an app registration is given; every listed one is used', () => {
     for (const entry of personalCatalog) {
-      expect(entry.permission, entry.name).toBeTruthy();
-      expect(MICROSOFT365_DELEGATED_PERMISSIONS.some(granted => permissionCovers(granted, entry.permission!)), entry.name).toBe(true);
+      expect(entry.permissions?.length, entry.name).toBeGreaterThan(0);
+      for (const needed of entry.permissions!) {
+        expect(MICROSOFT365_DELEGATED_PERMISSIONS.some(granted => permissionCovers(granted, needed)), `${entry.name}: ${needed}`).toBe(true);
+      }
     }
     for (const granted of MICROSOFT365_DELEGATED_PERMISSIONS) {
-      expect(personalCatalog.some(entry => permissionCovers(granted, entry.permission!)), granted).toBe(true);
+      expect(personalCatalog.some(entry => entry.permissions!.some(needed => permissionCovers(granted, needed))), granted).toBe(true);
     }
+    // move_message reads the person's own addresses as well as moving the message.
+    expect(personalCatalog.find(entry => entry.name === 'move_message')!.permissions).toEqual(['Mail.ReadWrite', 'User.Read']);
   });
 
   it('take no user, mailbox or calendar owner, and address only the person, their drives, sites or search', () => {
@@ -268,6 +275,21 @@ describe('the fixed refusals', () => {
     expect(await alias.gateway.callTool('move_message', { messageId: 'a', destination: 'deleteditems' })).toEqual(refusal('sent_message_to_deleted_items'));
     const received = delegated({ messages: { r: { id: 'r', isDraft: false, parentFolderId: 'folder-inbox', from: { emailAddress: { address: 'kunde@example.net' } } } } });
     expect((await received.gateway.callTool('move_message', { messageId: 'r', destination: 'deleteditems' })).isError).toBeFalsy();
+  });
+
+  it('moves nothing to Deleted Items when it is not known who sent the message', async () => {
+    const cases: Array<[string, Mailbox]> = [
+      ['an empty profile', { profile: {}, messages: { x: { id: 'x', isDraft: false, from: { emailAddress: { address: 'kunde@example.net' } } } } }],
+      ['no from or sender', { messages: { x: { id: 'x', isDraft: false, parentFolderId: 'folder-inbox' } } }],
+      ['no isDraft', { messages: { x: { id: 'x', parentFolderId: 'folder-inbox', from: { emailAddress: { address: 'kunde@example.net' } } } } }],
+    ];
+    for (const [what, state] of cases) {
+      const box = delegated(state);
+      expect(await box.gateway.callTool('move_message', { messageId: 'x', destination: 'deleteditems' }), what).toEqual(refusal('sender_unverified'));
+      expect(box.changes(), what).toHaveLength(0);
+      // Another folder than Deleted Items needs none of it.
+      expect((await delegated(state).gateway.callTool('move_message', { messageId: 'x', destination: 'archive' })).isError, what).toBeFalsy();
+    }
   });
 
   it('moves nothing when a lookup the checks need fails', async () => {

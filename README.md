@@ -355,8 +355,9 @@ const users = await gateway.callTool('list_users', { top: 50 });
 - **`microsoft365ToolCatalog`** is a deeply frozen list of every tool with its
   `upstream` Graph requests (method and path template, the protection
   guard's lookups included), `broad` (false for all), `access`
-  (`application` or `delegated`) and, for a delegated tool, the one delegated
-  `permission` it needs. A test holds it against the requests each tool
+  (`application` or `delegated`) and, for a delegated tool, the delegated
+  `permissions` its requests need (the main one first; `move_message` also
+  needs `User.Read` to read the person's own addresses). A test holds it against the requests each tool
   actually makes.
 
 ### The person's own mail, calendar and files (delegated, host mode)
@@ -387,8 +388,9 @@ changing or deleting a message that is not a draft, deleting an event that
 has attendees or that the person does not organise (cancel or decline it
 instead), moving a message the person has sent (not a draft, sent by the
 person) to Deleted Items wherever it lies, moving anything into the
-recoverable items folders. When a lookup these checks need fails, nothing is
-moved. Uploads never replace an existing file of the
+recoverable items folders. Moving to Deleted Items needs the person's profile
+with an address, the message's `isDraft` and a sender address: when any of
+them is missing, or a lookup the checks need fails, nothing is moved. Uploads never replace an existing file of the
 same name (`upload_file_version` makes a new version instead, and the earlier
 ones stay in the version history). `read_file_text` and
 `get_attachment_text` read text files of at most 1 MB; a file's content is

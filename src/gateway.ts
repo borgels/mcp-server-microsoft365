@@ -139,8 +139,8 @@ export interface GatewayToolCatalogEntry {
   readonly broad: boolean;
   /** The access the tool is made for: "application" (the directory tools) or "delegated" (the person's own data). */
   readonly access: Microsoft365Access;
-  /** For a delegated tool: the one delegated Graph permission it needs (the least Microsoft documents). */
-  readonly permission?: string;
+  /** For a delegated tool: the delegated Graph permissions its requests need (the least Microsoft documents), main one first. */
+  readonly permissions?: readonly string[];
 }
 
 const userRef = { type: 'string', description: 'User object id (GUID) or userPrincipalName.' } satisfies GatewayJsonObject;
@@ -440,7 +440,7 @@ const directoryTools: GatewayToolDefinition[] = [
 /** Every gateway tool: the directory tools, then the personal tools (personal-tools.ts). */
 export const microsoft365GatewayTools: GatewayToolDefinition[] = [
   ...directoryTools,
-  ...personalTools.map(({ upstream: _upstream, permission: _permission, ...definition }) => structuredClone(definition) as GatewayToolDefinition),
+  ...personalTools.map(({ upstream: _upstream, permissions: _permissions, ...definition }) => structuredClone(definition) as GatewayToolDefinition),
 ];
 
 /** The protection guard's lookups for a user (assertUserNotPrivileged). */
@@ -533,12 +533,12 @@ export const microsoft365ToolCatalog: readonly GatewayToolCatalogEntry[] = deepF
       access: 'application' as const,
     };
   }),
-  ...personalTools.map(({ upstream, permission, ...tool }) => ({
+  ...personalTools.map(({ upstream, permissions, ...tool }) => ({
     ...(structuredClone(tool) as GatewayToolDefinition),
     upstream: upstream.map(operation => ({ ...operation })),
     broad: false,
     access: 'delegated' as const,
-    permission,
+    permissions: [...permissions],
   })),
 ]);
 
