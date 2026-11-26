@@ -60,7 +60,9 @@ export interface RegisterToolsOptions {
   /** Register write/destructive tools. Off by default: the container then exposes read tools only. */
   enableWrites?: boolean;
   /**
-   * Guardrails for reset_password, Temporary Access Pass and group membership tools.
+   * Guardrails for every tool that changes an existing user: the privileged-target
+   * check runs before update_user, set_usage_location, set_manager, the licence and
+   * group membership tools, reset_password and the Temporary Access Pass tools.
    * Defaults to the environment (MS_ENABLE_PASSWORD_RESET, MS_ENABLE_TAP,
    * MS_PROTECTED_USERS, MS_PROTECTED_GROUPS). reset_password is registered only when
    * allowPasswordReset is true, the TAP tools only when allowTap is true.
