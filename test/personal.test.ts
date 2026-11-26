@@ -283,11 +283,28 @@ describe('the fixed refusals', () => {
     expect(box.changes()).toHaveLength(0);
   });
 
-  it('deletes only what has had no effect outside: neither delete is destructive', () => {
-    for (const name of ['delete_draft', 'delete_event']) {
-      expect(personalCatalog.find(entry => entry.name === name)!.riskLevel, name).toBe('write');
+  it('marks deleting a draft as write, and deleting an event as destructive', () => {
+    expect(personalCatalog.find(entry => entry.name === 'delete_draft')!.riskLevel).toBe('write');
+    expect(personalCatalog.find(entry => entry.name === 'delete_event')!.riskLevel).toBe('destructive');
+  });
+
+  it('deletes no draft already in Deleted Items or the recoverable items, and nothing when a lookup fails', async () => {
+    for (const parentFolderId of ['folder-deleteditems', 'folder-recoverableitemsdeletions']) {
+      const box = delegated({ message: { isDraft: true, parentFolderId } });
+      expect(await box.gateway.callTool('delete_draft', { messageId: 'm-1' }), parentFolderId).toEqual(refusal('draft_already_deleted'));
+      expect(box.changes(), parentFolderId).toHaveLength(0);
     }
-    expect(personalCatalog.filter(entry => entry.riskLevel === 'destructive')).toEqual([]);
+    for (const name of ['deleteditems', 'recoverableitemsdeletions']) {
+      const box = delegated({ failFolder: { name, status: 503 } });
+      expect((await box.gateway.callTool('delete_draft', { messageId: 'm-1' })).isError, name).toBe(true);
+      expect(box.changes(), name).toHaveLength(0);
+    }
+    const noFolder = delegated({ message: { isDraft: true, parentFolderId: undefined } });
+    expect(await noFolder.gateway.callTool('delete_draft', { messageId: 'm-1' })).toEqual(refusal('draft_already_deleted'));
+    expect(noFolder.changes()).toHaveLength(0);
+    // A draft in Drafts is deleted.
+    const drafts = delegated({ message: { isDraft: true, parentFolderId: 'folder-drafts' } });
+    expect((await drafts.gateway.callTool('delete_draft', { messageId: 'm-1' })).isError).toBeFalsy();
   });
 
   it('moves nothing to Deleted Items when it is not known who sent the message', async () => {

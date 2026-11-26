@@ -110,11 +110,6 @@ const DELETE = (path: string): GatewayUpstreamOperation => ({ method: 'DELETE', 
  * Reads that Microsoft Graph takes as a POST: a question with a body, which changes nothing (free/busy, meeting time
  * suggestions, Microsoft Search).
  */
-/**
- * delete_draft and delete_event are 'write', not 'destructive': each deletes only something that has had no effect
- * outside the person's own mailbox or calendar (a draft never sent, which goes to Deleted Items; an appointment without
- * attendees), and the server checks that just before. Nothing that was sent or that others have can be deleted.
- */
 export const READ_BY_POST: readonly string[] = Object.freeze(['get_schedule', 'find_meeting_times', 'search_files']);
 
 export const personalTools: readonly PersonalTool[] = [
@@ -258,7 +253,9 @@ export const personalTools: readonly PersonalTool[] = [
     riskLevel: 'write',
     enabledByDefault: false,
     inputSchema: object({ messageId }, ['messageId']),
-    upstream: [GET('/me/messages/{message}'), DELETE('/me/messages/{message}')],
+    // 'write', not 'destructive': it deletes only a draft that was never sent and is not in Deleted Items or the
+    // recoverable items, checked just before, and the draft goes to Deleted Items, from where it can be moved back.
+    upstream: [GET('/me/messages/{message}'), GET('/me/mailFolders/{folder}'), DELETE('/me/messages/{message}')],
     permissions: ['Mail.ReadWrite'],
   },
   // ------------------------------------------------------------------------------------------- mail organising
@@ -497,7 +494,7 @@ export const personalTools: readonly PersonalTool[] = [
     title: 'Delete an appointment',
     description:
       'Delete an appointment the person organises that has no attendees. Refused for a meeting (cancel it) or an invitation (decline it).',
-    riskLevel: 'write',
+    riskLevel: 'destructive',
     enabledByDefault: false,
     inputSchema: object({ eventId }, ['eventId']),
     upstream: [GET('/me/events/{event}'), DELETE('/me/events/{event}')],
