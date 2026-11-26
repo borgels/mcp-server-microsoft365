@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Tests: the host-mode test of a failed protection lookup turns password
+  reset and Temporary Access Passes on, so it is the lookup that stops every
+  tool, and it checks that the lookup was tried; the test that an ordinary
+  user goes through no longer swallows errors.
+- `RegisterToolsOptions.protection` describes the guard as it is from 0.6.0:
+  before every tool that changes an existing user.
+
 ## 0.6.0
 
 - The privileged-target guard runs before every change to an existing user,
