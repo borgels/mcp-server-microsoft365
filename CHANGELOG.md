@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.0
+
+- The person's own mail, calendar and files through `./gateway`, with one
+  person's delegated access: `policy.access: 'delegated'` in host mode offers
+  only the personal tools (40 of them: profile, mail, automatic reply,
+  calendar, OneDrive and SharePoint files), and `'application'` (the default)
+  only the directory tools, as before. Every personal tool works on `/me`, a
+  drive or site the person reaches, or Microsoft Search; none takes a user or
+  a mailbox (#49).
+- Each personal tool names its Graph requests and the delegated permissions
+  they need in `microsoft365ToolCatalog` (`access`, `permissions`);
+  `MICROSOFT365_DELEGATED_PERMISSIONS` is the list for an app registration.
+- Refused before anything is sent, with fixed texts (`REFUSAL_TEXT`):
+  changing or deleting a message that is not a draft, deleting an event with
+  attendees or one the person does not organise, moving a message the person
+  has sent (not a draft, sender the person) to Deleted Items wherever it lies,
+  moving anything into the recoverable items folders. Moving to Deleted Items
+  fails closed: without the person's addresses, the message's isDraft and a
+  sender address, or after a failed lookup, nothing is moved. No tool
+  for inbox rules, forwarding settings, other mailbox settings, permanent
+  deletion, deletion of sent mail, files or versions, sharing or members.
+- `GraphClient.upload`, `redirectLocation` and `downloadPreauthenticated`
+  (a SharePoint download address only, fetched without the token).
+
 ## 0.6.1
 
 - Every change to an existing user addresses the object the protection guard

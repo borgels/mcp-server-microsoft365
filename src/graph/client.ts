@@ -198,6 +198,87 @@ export class GraphClient {
     };
   }
 
+  /**
+   * PUT raw bytes (a file's content). With `failOnConflict`, an existing item of the same name is not replaced
+   * (`@microsoft.graph.conflictBehavior=fail`). Never retried: an upload is sent once.
+   */
+  async upload<T = unknown>(path: string, bytes: Uint8Array, contentType: string, failOnConflict = false): Promise<GraphResponse<T>> {
+    const url = this.url(failOnConflict ? `${path}?@microsoft.graph.conflictBehavior=fail` : path);
+    const response = await this.fetchImpl(url, {
+      method: 'PUT',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${await this.accessToken()}`, 'Content-Type': contentType },
+      body: bytes,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+    assertNotRedirect(response, 'PUT', url);
+    const responseBody = response.ok ? await readResponseBody(response) : await readErrorBodyOrNothing(response);
+    if (!response.ok) {
+      throw new GraphHttpError({
+        status: response.status,
+        method: 'PUT',
+        url,
+        payload: responseBody,
+        requestId: requestIdFrom(response.headers),
+        fallbackMessage: typeof responseBody === 'string' ? responseBody : undefined,
+      });
+    }
+    return { data: responseBody as T, status: response.status };
+  }
+
+  /**
+   * The address a Graph GET redirects to (a file's content: a short-lived, pre-authenticated download address). The
+   * redirect is read, never followed with the token.
+   */
+  async redirectLocation(path: string): Promise<string> {
+    const url = this.url(path);
+    const response = await this.fetchImpl(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${await this.accessToken()}` },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+    void response.body?.cancel().catch(() => undefined);
+    const location = response.headers.get('location');
+    if (response.status >= 300 && response.status < 400 && location) return location;
+    throw new GraphHttpError({
+      status: response.ok ? 502 : response.status,
+      method: 'GET',
+      url,
+      requestId: requestIdFrom(response.headers),
+      fallbackMessage: 'Microsoft Graph did not give a download address.',
+    });
+  }
+
+  /**
+   * Fetches a pre-authenticated download address from SharePoint or OneDrive (https, a host under sharepoint.com),
+   * WITHOUT the access token, up to `maxBytes`. Any other address is refused before a request is made.
+   */
+  async downloadPreauthenticated(location: string, maxBytes: number): Promise<Buffer> {
+    let parsed: URL;
+    try {
+      parsed = new URL(location);
+    } catch {
+      throw new Error('The download address is not a URL.');
+    }
+    const host = parsed.hostname.toLowerCase();
+    if (parsed.protocol !== 'https:' || parsed.port !== '' || parsed.username !== '' || parsed.password !== '' || !host.endsWith('.sharepoint.com')) {
+      throw new Error('Refusing a download address outside SharePoint.');
+    }
+    const response = await this.fetchImpl(parsed.toString(), {
+      method: 'GET',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new GraphHttpError({ status: response.status, method: 'GET', url: `${parsed.origin}/`, requestId: requestIdFrom(response.headers) });
+    }
+    const { text, exceeded } = await readTextUpTo(response, maxBytes);
+    if (exceeded) throw new Error('The file is larger than the limit.');
+    return Buffer.from(text, 'utf8');
+  }
+
   /** URL for a `directoryObjects/{id}` reference, used by `$ref` membership calls. */
   directoryObjectUrl(id: string): string {
     return `${this.baseUrl}/directoryObjects/${pathSegment(id, 'id')}`;
