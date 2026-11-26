@@ -6,6 +6,41 @@
   list keeps a 404 on removal an error, and the group changes write to the
   object id the group lookup returned, not to the reference they were given.
 
+## 0.7.1
+
+- `delete_draft` is `write`, not `destructive`: it deletes only a draft that
+  was never sent, and it goes to Deleted Items. It now also refuses a draft
+  that is already in Deleted Items or the recoverable items (that would delete
+  it for good), and sends nothing when a folder lookup fails. A host that
+  keeps destructive tools from every role can now let a role delete its own
+  drafts. `delete_event` stays `destructive`: whether invitations were ever
+  sent for an appointment cannot be told for certain.
+- Test: a move to the recoverable items folder given by its own id is refused.
+
+## 0.7.0
+
+- The person's own mail, calendar and files through `./gateway`, with one
+  person's delegated access: `policy.access: 'delegated'` in host mode offers
+  only the personal tools (40 of them: profile, mail, automatic reply,
+  calendar, OneDrive and SharePoint files), and `'application'` (the default)
+  only the directory tools, as before. Every personal tool works on `/me`, a
+  drive or site the person reaches, or Microsoft Search; none takes a user or
+  a mailbox (#49).
+- Each personal tool names its Graph requests and the delegated permissions
+  they need in `microsoft365ToolCatalog` (`access`, `permissions`);
+  `MICROSOFT365_DELEGATED_PERMISSIONS` is the list for an app registration.
+- Refused before anything is sent, with fixed texts (`REFUSAL_TEXT`):
+  changing or deleting a message that is not a draft, deleting an event with
+  attendees or one the person does not organise, moving a message the person
+  has sent (not a draft, sender the person) to Deleted Items wherever it lies,
+  moving anything into the recoverable items folders. Moving to Deleted Items
+  fails closed: without the person's addresses, the message's isDraft and a
+  sender address, or after a failed lookup, nothing is moved. No tool
+  for inbox rules, forwarding settings, other mailbox settings, permanent
+  deletion, deletion of sent mail, files or versions, sharing or members.
+- `GraphClient.upload`, `redirectLocation` and `downloadPreauthenticated`
+  (a SharePoint download address only, fetched without the token).
+
 ## 0.6.1
 
 - Every change to an existing user addresses the object the protection guard

@@ -4,6 +4,7 @@ import {
   createMicrosoft365Gateway,
   microsoft365GatewayTools,
   microsoft365ToolCatalog,
+  READ_BY_POST,
 } from '../src/gateway.js';
 
 const TOKEN = 'host-token-0123456789abcdef';
@@ -34,8 +35,12 @@ describe('microsoft365ToolCatalog', () => {
       expect(entry.broad).toBe(false);
     }
     expect(Object.isFrozen(microsoft365ToolCatalog[0]!.upstream[0])).toBe(true);
-    const reads = microsoft365ToolCatalog.filter(entry => entry.riskLevel === 'read');
-    for (const entry of reads) expect(entry.upstream.every(op => op.method === 'GET')).toBe(true);
+    // A read makes only GET requests, except the reads Graph takes as a POST with a question in the body.
+    const reads = microsoft365ToolCatalog.filter(entry => entry.riskLevel === 'read' && !READ_BY_POST.includes(entry.name));
+    for (const entry of reads) expect(entry.upstream.every(op => op.method === 'GET'), entry.name).toBe(true);
+    for (const name of READ_BY_POST) {
+      expect(microsoft365ToolCatalog.find(entry => entry.name === name)!.upstream.map(op => op.method), name).toEqual(['POST']);
+    }
   });
 });
 

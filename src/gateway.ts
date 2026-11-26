@@ -27,7 +27,18 @@ import {
   type UpdateUserInput,
 } from './graph/operations.js';
 import { pathSegment } from './graph/path.js';
+import * as personal from './graph/personal.js';
+import { RefusedError } from './graph/personal.js';
 import { ProtectedTargetError, protectionPolicyFromEnv, type ProtectionPolicy } from './graph/protection.js';
+import { PERSONAL_TOOL_NAMES, personalTools } from './personal-tools.js';
+
+export {
+  MICROSOFT365_DELEGATED_PERMISSIONS,
+  READ_BY_POST,
+  permissionCovers,
+  type DelegatedPermission,
+} from './personal-tools.js';
+export { REFUSAL_TEXT, type RefusalCode } from './graph/personal.js';
 
 export type GatewayRiskLevel = 'read' | 'write' | 'destructive';
 export type GatewayJsonValue = string | number | boolean | null | GatewayJsonValue[] | { [key: string]: GatewayJsonValue };
@@ -78,8 +89,19 @@ export interface Microsoft365GatewayOptions extends GraphClientOptions {
   policy?: Microsoft365InstancePolicy;
 }
 
+/**
+ * Which access the host's token is:
+ *   - "application": an app-only access to a tenant (client credentials). The directory tools (users, groups,
+ *     licences) are offered.
+ *   - "delegated": one person's own access (authorization code, then refresh), for their own mail, calendar and files.
+ *     Only the personal tools are offered, and Microsoft Graph keeps them to what that person can reach.
+ */
+export type Microsoft365Access = 'application' | 'delegated';
+
 /** Policy given by an embedding host for one gateway instance. */
 export interface Microsoft365InstancePolicy {
+  /** The kind of access the token is, and so which tools are offered. Default "application". */
+  access?: Microsoft365Access;
   /** Allow write and destructive tools. Default false. */
   enableWrites?: boolean;
   /** Tools turned off on this instance. Must name gateway tools. */
@@ -111,9 +133,14 @@ export interface GatewayToolCatalogEntry {
   /**
    * True when the tool can read more than its name says (anything in the
    * directory, chosen by the input). No gateway tool is broad: every read
-   * names what it reads (users, groups, licences).
+   * names what it reads (users, groups, licences, the person's own mail,
+   * calendar or files).
    */
   readonly broad: boolean;
+  /** The access the tool is made for: "application" (the directory tools) or "delegated" (the person's own data). */
+  readonly access: Microsoft365Access;
+  /** For a delegated tool: the delegated Graph permissions its requests need (the least Microsoft documents), main one first. */
+  readonly permissions?: readonly string[];
 }
 
 const userRef = { type: 'string', description: 'User object id (GUID) or userPrincipalName.' } satisfies GatewayJsonObject;
@@ -129,7 +156,8 @@ const readListProps = {
   orderby: { type: 'string', description: 'OData $orderby expression.' },
 } satisfies Record<string, GatewayJsonObject>;
 
-export const microsoft365GatewayTools: GatewayToolDefinition[] = [
+/** The directory tools (users, groups, licences), made for an app-only access. */
+const directoryTools: GatewayToolDefinition[] = [
   {
     name: 'get_user',
     title: 'Get Microsoft 365 user',
@@ -409,6 +437,12 @@ export const microsoft365GatewayTools: GatewayToolDefinition[] = [
   },
 ];
 
+/** Every gateway tool: the directory tools, then the personal tools (personal-tools.ts). */
+export const microsoft365GatewayTools: GatewayToolDefinition[] = [
+  ...directoryTools,
+  ...personalTools.map(({ upstream: _upstream, permissions: _permissions, ...definition }) => structuredClone(definition) as GatewayToolDefinition),
+];
+
 /** The protection guard's lookups for a user (assertUserNotPrivileged). */
 const USER_GUARD_LOOKUPS: readonly GatewayUpstreamOperation[] = [
   { method: 'GET', path: '/users/{user}' },
@@ -488,17 +522,28 @@ function deepFreeze<T>(value: T): T {
  * requests it may make and the broad mark, deeply frozen. Hosts can build
  * their own permission model from it without creating an instance.
  */
-export const microsoft365ToolCatalog: readonly GatewayToolCatalogEntry[] = deepFreeze(
-  microsoft365GatewayTools.map(tool => {
+export const microsoft365ToolCatalog: readonly GatewayToolCatalogEntry[] = deepFreeze([
+  ...directoryTools.map(tool => {
     const upstream = UPSTREAM[tool.name];
     if (!upstream) throw new Error(`No upstream list for the gateway tool ${tool.name}`);
     return {
       ...structuredClone(tool),
       upstream: upstream.map(operation => ({ ...operation })),
       broad: false,
+      access: 'application' as const,
     };
   }),
-);
+  ...personalTools.map(({ upstream, permissions, ...tool }) => ({
+    ...(structuredClone(tool) as GatewayToolDefinition),
+    upstream: upstream.map(operation => ({ ...operation })),
+    broad: false,
+    access: 'delegated' as const,
+    permissions: [...permissions],
+  })),
+]);
+
+/** The kind of access each tool is offered for in host mode. */
+const ACCESS_OF: ReadonlyMap<string, Microsoft365Access> = new Map(microsoft365ToolCatalog.map(entry => [entry.name, entry.access]));
 
 const TOOL_NAMES: ReadonlySet<string> = new Set(microsoft365GatewayTools.map(tool => tool.name));
 
@@ -536,7 +581,9 @@ function createHostGateway(options: Microsoft365GatewayOptions, hostPolicy: Micr
   if (options.baseUrl !== undefined && options.baseUrl !== HOST_MODE_BASE_URL) {
     throw new GatewayConfigError(`A host-mode Microsoft 365 gateway only talks to ${HOST_MODE_BASE_URL}.`);
   }
-  const disabled = new Set<string>(HOST_MODE_UNSUPPORTED);
+  const access: unknown = hostPolicy.access ?? 'application';
+  if (access !== 'application' && access !== 'delegated') throw new GatewayConfigError('policy.access must be "application" or "delegated".');
+  const disabled = new Set<string>(access === 'application' ? HOST_MODE_UNSUPPORTED : []);
   for (const name of hostPolicy.disabledTools ?? []) {
     if (!TOOL_NAMES.has(name)) throw new GatewayConfigError(`policy.disabledTools names no gateway tool: ${String(name).slice(0, 100)}`);
     disabled.add(name);
@@ -564,7 +611,8 @@ function createHostGateway(options: Microsoft365GatewayOptions, hostPolicy: Micr
       ...definedOnly(options.protection ?? {}),
     },
   );
-  const offered = (tool: GatewayToolDefinition) => !disabled.has(tool.name) && (tool.riskLevel === 'read' || enableWrites);
+  const offered = (tool: GatewayToolDefinition) =>
+    ACCESS_OF.get(tool.name) === access && !disabled.has(tool.name) && (tool.riskLevel === 'read' || enableWrites);
   const tools = microsoft365GatewayTools.filter(offered);
   const byName = new Map(tools.map(tool => [tool.name, tool]));
 
@@ -590,6 +638,8 @@ function createHostGateway(options: Microsoft365GatewayOptions, hostPolicy: Micr
           const refused = errorResult('Refused: the target is protected.', failureWithoutToken(error, accessToken));
           return withFailureInForm(withoutToken(refused, accessToken));
         }
+        // A personal tool refused the change before anything was sent: a fixed text chosen by its code.
+        if (error instanceof RefusedError) return errorResult(personal.REFUSAL_TEXT[error.code]);
         return errorResult('The Microsoft 365 call could not be completed.');
       }
     },
@@ -819,10 +869,205 @@ function createEnvGateway(options: Microsoft365GatewayOptions, fixedProtection?:
           );
 
         default:
+          if (PERSONAL_TOOL_NAMES.has(toolName)) return callPersonalTool(client, toolName, input);
           return errorResult(`Unsupported Microsoft 365 gateway tool: ${toolName}`);
       }
     },
   };
+}
+
+/** A string as given, untrimmed (a body, a file's text), or undefined when it is not a string. */
+function rawString(value: GatewayJsonValue | undefined): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** Runs one personal tool on the person's own data. A value the tool does not take is a RefusedError. */
+async function callPersonalTool(client: GraphClient, toolName: string, input: GatewayJsonObject): Promise<GatewayToolResult> {
+  const s = (name: string) => stringValue(input[name]);
+  const req = (name: string) => requiredString(input[name], name);
+  const n = (name: string) => numberValue(input[name]);
+  const b = (name: string) => booleanValue(input[name]);
+  const list = (name: string) => stringArray(input[name]);
+  const draft = (): personal.DraftInput => ({
+    subject: rawString(input.subject),
+    body: rawString(input.body),
+    bodyType: s('bodyType'),
+    to: list('to'),
+    cc: list('cc'),
+    bcc: list('bcc'),
+    importance: s('importance'),
+  });
+  const event = (): personal.EventInput => ({
+    subject: rawString(input.subject),
+    start: s('start'),
+    end: s('end'),
+    timeZone: s('timeZone'),
+    allDay: b('allDay'),
+    body: rawString(input.body),
+    bodyType: s('bodyType'),
+    location: rawString(input.location),
+    attendees: list('attendees'),
+    optionalAttendees: list('optionalAttendees'),
+    isOnlineMeeting: b('isOnlineMeeting'),
+    showAs: s('showAs'),
+  });
+  switch (toolName) {
+    case 'get_my_profile':
+      return jsonResult('Fetched profile.', await personal.getMyProfile(client));
+    case 'search_mail':
+      return jsonResult(
+        'Fetched messages.',
+        await personal.searchMail(client, {
+          query: s('query'),
+          from: s('from'),
+          folder: s('folder'),
+          unreadOnly: b('unreadOnly'),
+          receivedAfter: s('receivedAfter'),
+          receivedBefore: s('receivedBefore'),
+          top: n('top'),
+          skip: n('skip'),
+        }),
+      );
+    case 'get_message':
+      return jsonResult('Fetched message.', await personal.getMessage(client, req('messageId'), s('bodyType')));
+    case 'get_conversation':
+      return jsonResult('Fetched conversation.', await personal.getConversation(client, req('conversationId'), n('top')));
+    case 'list_mail_folders':
+      return jsonResult('Fetched mail folders.', await personal.listMailFolders(client, s('parentFolderId')));
+    case 'list_attachments':
+      return jsonResult('Fetched attachments.', await personal.listAttachments(client, req('messageId')));
+    case 'get_attachment_text':
+      return jsonResult('Fetched attachment.', await personal.getAttachmentText(client, req('messageId'), req('attachmentId')));
+    case 'get_automatic_replies':
+      return jsonResult('Fetched automatic replies.', await personal.getAutomaticReplies(client));
+    case 'create_draft':
+      return jsonResult('Created draft.', await personal.createDraft(client, draft()));
+    case 'update_draft':
+      return jsonResult('Updated draft.', await personal.updateDraft(client, req('messageId'), draft()));
+    case 'create_reply_draft':
+      return jsonResult('Created reply draft.', await personal.createReplyDraft(client, req('messageId'), rawString(input.comment), b('replyAll')));
+    case 'create_forward_draft':
+      return jsonResult('Created forward draft.', await personal.createForwardDraft(client, req('messageId'), list('to'), rawString(input.comment)));
+    case 'delete_draft':
+      return jsonResult('Deleted draft.', await personal.deleteDraft(client, req('messageId')));
+    case 'move_message':
+      return jsonResult('Moved message.', await personal.moveMessage(client, req('messageId'), req('destination')));
+    case 'mark_message':
+      return jsonResult(
+        'Marked message.',
+        await personal.markMessage(client, req('messageId'), { isRead: b('isRead'), flag: s('flag'), categories: list('categories') }),
+      );
+    case 'send_draft':
+      return jsonResult('Sent draft.', await personal.sendDraft(client, req('messageId')));
+    case 'send_mail':
+      return jsonResult('Sent message.', await personal.sendMail(client, draft()));
+    case 'reply':
+      return jsonResult('Sent reply.', await personal.reply(client, req('messageId'), rawString(input.comment) ?? '', b('replyAll')));
+    case 'forward':
+      return jsonResult('Forwarded message.', await personal.forward(client, req('messageId'), list('to') ?? [], rawString(input.comment)));
+    case 'set_automatic_replies':
+      return jsonResult(
+        'Set automatic replies.',
+        await personal.setAutomaticReplies(client, {
+          status: req('status'),
+          internalMessage: rawString(input.internalMessage),
+          externalMessage: rawString(input.externalMessage),
+          externalAudience: s('externalAudience'),
+          start: s('start'),
+          end: s('end'),
+          timeZone: s('timeZone'),
+        }),
+      );
+    case 'list_calendars':
+      return jsonResult('Fetched calendars.', await personal.listCalendars(client));
+    case 'list_events':
+      return jsonResult(
+        'Fetched events.',
+        await personal.listEvents(client, { start: req('start'), end: req('end'), calendarId: s('calendarId'), top: n('top'), timeZone: s('timeZone') }),
+      );
+    case 'get_event':
+      return jsonResult('Fetched event.', await personal.getEvent(client, req('eventId'), s('timeZone')));
+    case 'get_schedule':
+      return jsonResult(
+        'Fetched schedule.',
+        await personal.getSchedule(client, {
+          people: list('people') ?? [],
+          start: req('start'),
+          end: req('end'),
+          timeZone: s('timeZone'),
+          intervalMinutes: n('intervalMinutes'),
+        }),
+      );
+    case 'find_meeting_times':
+      return jsonResult(
+        'Fetched meeting time suggestions.',
+        await personal.findMeetingTimes(client, {
+          attendees: list('attendees') ?? [],
+          durationMinutes: n('durationMinutes') ?? 30,
+          start: s('start'),
+          end: s('end'),
+          timeZone: s('timeZone'),
+          maxCandidates: n('maxCandidates'),
+        }),
+      );
+    case 'create_event':
+      return jsonResult('Created event.', await personal.createEvent(client, { ...event(), calendarId: s('calendarId') }));
+    case 'update_event':
+      return jsonResult('Updated event.', await personal.updateEvent(client, req('eventId'), event()));
+    case 'respond_to_event':
+      return jsonResult(
+        'Answered invitation.',
+        await personal.respondToEvent(client, req('eventId'), { response: req('response'), comment: rawString(input.comment), sendResponse: b('sendResponse') }),
+      );
+    case 'cancel_event':
+      return jsonResult('Cancelled meeting.', await personal.cancelEvent(client, req('eventId'), rawString(input.comment)));
+    case 'delete_event':
+      return jsonResult('Deleted appointment.', await personal.deleteEvent(client, req('eventId')));
+    case 'search_files':
+      return jsonResult('Fetched files.', await personal.searchFiles(client, req('query'), n('top'), n('from')));
+    case 'list_folder':
+      return jsonResult('Fetched folder.', await personal.listFolder(client, s('driveId'), s('itemId'), n('top')));
+    case 'get_file':
+      return jsonResult('Fetched file.', await personal.getFile(client, s('driveId'), req('itemId')));
+    case 'read_file_text':
+      return jsonResult('Fetched file text.', await personal.readFileText(client, s('driveId'), req('itemId')));
+    case 'search_sites':
+      return jsonResult('Fetched sites.', await personal.searchSites(client, req('query')));
+    case 'list_site_drives':
+      return jsonResult('Fetched document libraries.', await personal.listSiteDrives(client, req('siteId')));
+    case 'upload_file':
+      return jsonResult(
+        'Uploaded file.',
+        await personal.uploadFile(client, {
+          name: req('name'),
+          driveId: s('driveId'),
+          parentId: s('parentId'),
+          text: rawString(input.text),
+          contentBase64: rawString(input.contentBase64),
+          contentType: s('contentType'),
+        }),
+      );
+    case 'upload_file_version':
+      return jsonResult(
+        'Uploaded new version.',
+        await personal.uploadFileVersion(client, {
+          driveId: s('driveId'),
+          itemId: req('itemId'),
+          text: rawString(input.text),
+          contentBase64: rawString(input.contentBase64),
+          contentType: s('contentType'),
+        }),
+      );
+    case 'create_folder':
+      return jsonResult('Created folder.', await personal.createFolder(client, { name: req('name'), driveId: s('driveId'), parentId: s('parentId') }));
+    case 'move_file':
+      return jsonResult(
+        'Moved file.',
+        await personal.moveFile(client, { driveId: s('driveId'), itemId: req('itemId'), newName: s('newName'), newParentId: s('newParentId') }),
+      );
+    default:
+      return errorResult(`Unsupported Microsoft 365 gateway tool: ${toolName}`);
+  }
 }
 
 function readQuery(input: GatewayJsonObject): Record<string, GraphQueryValue> {

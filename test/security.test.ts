@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import { describe, expect, it } from 'vitest';
-import { createMicrosoft365Gateway, microsoft365GatewayTools, type GatewayJsonObject } from '../src/gateway.js';
+import { createMicrosoft365Gateway, microsoft365ToolCatalog, type GatewayJsonObject } from '../src/gateway.js';
 import { GraphClient } from '../src/graph/client.js';
 import { resolveSkuId } from '../src/graph/licenses.js';
 import { assertSafePathParam } from '../src/graph/path.js';
@@ -196,7 +196,8 @@ const USER_CHANGES: ReadonlyArray<[string, GatewayJsonObject]> = [
 
 describe('every change to an existing user is guarded', () => {
   it('covers every write tool but create_user', () => {
-    const writes = microsoft365GatewayTools.filter(t => t.riskLevel !== 'read').map(t => t.name);
+    // The directory tools: the personal tools change only the signed-in person's own mail, calendar and files.
+    const writes = microsoft365ToolCatalog.filter(t => t.access === 'application' && t.riskLevel !== 'read').map(t => t.name);
     const covered = new Set(USER_CHANGES.map(([name]) => name));
     // activate_pim_role changes no user: the delegated caller activates its own eligible role (and no host offers it).
     expect(writes.filter(name => !covered.has(name)).sort()).toEqual(['activate_pim_role', 'create_user']);
