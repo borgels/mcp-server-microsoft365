@@ -61,12 +61,16 @@ interface DirectoryObject {
 
 const MAX_PAGES = 50;
 
-/** Throws unless `userRef` is an ordinary, non-privileged user. */
+/**
+ * Throws unless `userRef` is an ordinary, non-privileged user. Returns the user's object id as the directory gave it:
+ * the change that follows must address that object, the one that was checked, and never `userRef` again (a login name
+ * is not accepted everywhere an object id is, and could name another object by then).
+ */
 export async function assertUserNotPrivileged(
   client: GraphClient,
   userRef: string,
   policy: ProtectionPolicy,
-): Promise<void> {
+): Promise<string> {
   let user: { id?: string; userPrincipalName?: string; mail?: string | null } | undefined;
   try {
     user = (
@@ -132,14 +136,15 @@ export async function assertUserNotPrivileged(
       `Refusing: user "${userRef}" has ${assignments.length} directory role assignment(s). Privileged accounts must be handled manually.`,
     );
   }
+  return user.id;
 }
 
-/** Throws unless `groupId` is an ordinary group (not role-assignable, not protected). */
+/** Throws unless `groupId` is an ordinary group (not role-assignable, not protected). Returns its object id. */
 export async function assertGroupNotProtected(
   client: GraphClient,
   groupId: string,
   policy: ProtectionPolicy,
-): Promise<void> {
+): Promise<string> {
   if (policy.protectedGroups.includes(groupId.trim().toLowerCase())) {
     throw new ProtectedTargetError(`Refusing: group "${groupId}" is listed in MS_PROTECTED_GROUPS.`);
   }
@@ -164,6 +169,7 @@ export async function assertGroupNotProtected(
   if (groupIsListed(group, policy)) {
     throw new ProtectedTargetError(`Refusing: group "${group.displayName ?? groupId}" is listed in MS_PROTECTED_GROUPS.`);
   }
+  return group.id;
 }
 
 function groupIsListed(group: DirectoryObject, policy: ProtectionPolicy): boolean {
@@ -173,7 +179,8 @@ function groupIsListed(group: DirectoryObject, policy: ProtectionPolicy): boolea
     .some(v => policy.protectedGroups.includes(v.trim().toLowerCase()));
 }
 
-async function listAll<T>(client: GraphClient, path: string, query: Record<string, string>): Promise<T[]> {
+/** Every item of a Graph collection, following nextLink (same origin only) up to MAX_PAGES pages. */
+export async function listAll<T>(client: GraphClient, path: string, query: Record<string, string>): Promise<T[]> {
   const items: T[] = [];
   let response = await client.get<{ value?: T[] }>(path, query);
   for (let page = 1; ; page += 1) {

@@ -6,6 +6,7 @@ import { assertSafePathParam, pathSegment } from './path.js';
 import {
   assertGroupNotProtected,
   assertUserNotPrivileged,
+  listAll,
   ProtectedTargetError,
   protectionPolicyFromEnv,
   type ProtectionPolicy,
@@ -144,8 +145,8 @@ export async function setUsageLocation(
   usageLocation: string,
   policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ userId: string; usageLocation: string }> {
-  await assertUserNotPrivileged(client, userId, policy);
-  await patchUsageLocation(client, userId, usageLocation);
+  const objectId = await assertUserNotPrivileged(client, userId, policy);
+  await patchUsageLocation(client, objectId, usageLocation);
   return { userId, usageLocation };
 }
 
@@ -173,14 +174,15 @@ export async function assignLicense(
   policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ userId: string; assigned: SkuResolution; usageLocation: string }> {
   assertSafePathParam(input.userId, 'userId');
-  await assertUserNotPrivileged(client, input.userId, policy);
+  // Every request below addresses the object the guard checked, by its object id.
+  const objectId = await assertUserNotPrivileged(client, input.userId, policy);
   // usageLocation MUST be set before assigning a license, otherwise Graph
   // rejects the assignment with an "invalid usage location" error.
   let usageLocation = input.usageLocation?.trim();
   if (usageLocation) {
-    await patchUsageLocation(client, input.userId, usageLocation);
+    await patchUsageLocation(client, objectId, usageLocation);
   } else {
-    usageLocation = await getUserUsageLocation(client, input.userId);
+    usageLocation = await getUserUsageLocation(client, objectId);
     if (!usageLocation) {
       throw new Error(
         `Cannot assign a license: user ${input.userId} has no usageLocation set. Provide a usageLocation (ISO 3166-1 alpha-2, e.g. "DK") so it can be set before the license is assigned.`,
@@ -202,7 +204,7 @@ export async function assignLicense(
     );
   }
 
-  await client.post(`/users/${pathSegment(input.userId, 'userId')}/assignLicense`, {
+  await client.post(`/users/${pathSegment(objectId, 'userId')}/assignLicense`, {
     addLicenses: [{ skuId: resolved.skuId, disabledPlans: input.disabledPlans ?? [] }],
     removeLicenses: [],
   });
@@ -216,7 +218,7 @@ export async function removeLicense(
   policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ userId: string; removed: SkuResolution }> {
   assertSafePathParam(input.userId, 'userId');
-  await assertUserNotPrivileged(client, input.userId, policy);
+  const objectId = await assertUserNotPrivileged(client, input.userId, policy);
   const skus = await listSubscribedSkus(client);
   const resolved = resolveSkuId(skus, input.license);
   if (!resolved) {
@@ -225,7 +227,7 @@ export async function removeLicense(
     );
   }
 
-  await client.post(`/users/${pathSegment(input.userId, 'userId')}/assignLicense`, {
+  await client.post(`/users/${pathSegment(objectId, 'userId')}/assignLicense`, {
     addLicenses: [],
     removeLicenses: [resolved.skuId],
   });
@@ -239,11 +241,12 @@ export async function addGroupMember(
   userId: string,
   policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ groupId: string; userId: string; added: boolean; alreadyMember: boolean }> {
-  await assertGroupNotProtected(client, groupId, policy);
-  await assertUserNotPrivileged(client, userId, policy);
+  // The group and the user as the guard found them: a reference by login name is not a valid directory object.
+  const groupObjectId = await assertGroupNotProtected(client, groupId, policy);
+  const userObjectId = await assertUserNotPrivileged(client, userId, policy);
   try {
-    await client.post(`/groups/${pathSegment(groupId, 'groupId')}/members/$ref`, {
-      '@odata.id': client.directoryObjectUrl(userId),
+    await client.post(`/groups/${pathSegment(groupObjectId, 'groupId')}/members/$ref`, {
+      '@odata.id': client.directoryObjectUrl(userObjectId),
     });
     return { groupId, userId, added: true, alreadyMember: false };
   } catch (error) {
@@ -260,17 +263,31 @@ export async function removeGroupMember(
   userId: string,
   policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ groupId: string; userId: string; removed: boolean; alreadyAbsent: boolean }> {
-  await assertGroupNotProtected(client, groupId, policy);
-  await assertUserNotPrivileged(client, userId, policy);
+  // Graph removes a member by object id only: a login name in the path gives 404, which must never read as "not a
+  // member". The ids are the ones the guard checked.
+  const groupObjectId = await assertGroupNotProtected(client, groupId, policy);
+  const userObjectId = await assertUserNotPrivileged(client, userId, policy);
   try {
-    await client.delete(`/groups/${pathSegment(groupId, 'groupId')}/members/${pathSegment(userId, 'userId')}/$ref`);
+    await client.delete(`/groups/${pathSegment(groupObjectId, 'groupId')}/members/${pathSegment(userObjectId, 'userId')}/$ref`);
     return { groupId, userId, removed: true, alreadyAbsent: false };
   } catch (error) {
-    if (error instanceof GraphHttpError && error.status === 404) {
+    // A 404 is "already removed" only when the group's own member list shows the user is not in it. If the list says
+    // the user is a member, or cannot be read, the original error stands.
+    if (error instanceof GraphHttpError && error.status === 404 && !(await isDirectMember(client, groupObjectId, userObjectId))) {
       return { groupId, userId, removed: false, alreadyAbsent: true };
     }
     throw error;
   }
+}
+
+/** Whether `userObjectId` is a direct member of the group. Throws when the member list cannot be read. */
+async function isDirectMember(client: GraphClient, groupObjectId: string, userObjectId: string): Promise<boolean> {
+  const members = await listAll<{ id?: string }>(client, `/groups/${pathSegment(groupObjectId, 'groupId')}/members`, {
+    $select: 'id',
+    $top: '999',
+  });
+  const wanted = userObjectId.toLowerCase();
+  return members.some(member => typeof member.id === 'string' && member.id.toLowerCase() === wanted);
 }
 
 /** Attributes that {@link updateUser} may PATCH onto an existing user. */
@@ -339,8 +356,8 @@ export async function updateUser(
     throw new Error('updateUser requires at least one field to change.');
   }
 
-  await assertUserNotPrivileged(client, userId, policy);
-  await client.patch(`/users/${pathSegment(userId, 'userId')}`, body);
+  const objectId = await assertUserNotPrivileged(client, userId, policy);
+  await client.patch(`/users/${pathSegment(objectId, 'userId')}`, body);
   return { userId, updated };
 }
 
@@ -359,11 +376,11 @@ export async function resetPassword(
   if (!policy.allowPasswordReset) {
     throw new ProtectedTargetError('Password reset is disabled. Set MS_ENABLE_PASSWORD_RESET=true (in addition to MS_ENABLE_WRITES=true) to allow it.');
   }
-  await assertUserNotPrivileged(client, userId, policy);
+  const objectId = await assertUserNotPrivileged(client, userId, policy);
   const temporaryPassword = generateTempPassword();
   await client.request({
     method: 'PATCH',
-    path: `/users/${pathSegment(userId, 'userId')}`,
+    path: `/users/${pathSegment(objectId, 'userId')}`,
     body: { passwordProfile: { password: temporaryPassword, forceChangePasswordNextSignIn: true } },
   });
   return { userId, temporaryPassword, forceChangePasswordNextSignIn: true };
@@ -378,7 +395,7 @@ export async function setManager(
 ): Promise<{ userId: string; managerId: string; managerObjectId: string }> {
   // The user whose manager changes is the object that is written, so it must be an ordinary user. The manager is
   // only referenced: its own account is not changed, and an administrator may well be someone's manager.
-  await assertUserNotPrivileged(client, userId, policy);
+  const objectId = await assertUserNotPrivileged(client, userId, policy);
   // /directoryObjects addresses an OBJECT ID and nothing else. The tool takes a
   // userRef like every other tool here, so a UPN arrives routinely and produced
   // `400 Request_BadRequest: Invalid object identifier 'manager@example.com'`.
@@ -386,7 +403,7 @@ export async function setManager(
   const managerObjectId = await resolveObjectId(client, managerId);
   await client.request({
     method: 'PUT',
-    path: `/users/${pathSegment(userId, 'userId')}/manager/$ref`,
+    path: `/users/${pathSegment(objectId, 'userId')}/manager/$ref`,
     body: { '@odata.id': client.directoryObjectUrl(managerObjectId) },
   });
   return { userId, managerId, managerObjectId };
@@ -409,9 +426,9 @@ export async function removeManager(
   userId: string,
   policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ userId: string; removed: boolean }> {
-  await assertUserNotPrivileged(client, userId, policy);
+  const objectId = await assertUserNotPrivileged(client, userId, policy);
   try {
-    await client.delete(`/users/${pathSegment(userId, 'userId')}/manager/$ref`);
+    await client.delete(`/users/${pathSegment(objectId, 'userId')}/manager/$ref`);
     return { userId, removed: true };
   } catch (error) {
     if (error instanceof GraphHttpError && error.status === 404) {
@@ -473,8 +490,7 @@ export async function createTemporaryAccessPass(
   policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<CreateTapResult> {
   assertTapAllowed(policy);
-  await assertUserNotPrivileged(client, userId, policy);
-  const path = tapMethodsPath(userId);
+  const path = tapMethodsPath(await assertUserNotPrivileged(client, userId, policy));
   const requireAlphanumeric = input.requireAlphanumeric !== false;
   const maxAttempts = Math.max(1, input.maxAttempts ?? 8);
 
@@ -521,8 +537,7 @@ export async function deleteTemporaryAccessPass(
   policy: ProtectionPolicy = protectionPolicyFromEnv(),
 ): Promise<{ userId: string; deleted: string[] }> {
   assertTapAllowed(policy);
-  await assertUserNotPrivileged(client, userId, policy);
-  const path = tapMethodsPath(userId);
+  const path = tapMethodsPath(await assertUserNotPrivileged(client, userId, policy));
 
   if (methodId) {
     await client.delete(`${path}/${pathSegment(methodId, 'methodId')}`);

@@ -196,7 +196,8 @@ response) the operation is refused: the check fails closed. Privileged accounts
 are meant to be handled by a human in the Entra portal. For `set_manager` the
 user whose manager changes is checked; the manager is only referenced, so an
 administrator can still be someone's manager. `create_user` makes a new account
-and is not checked. PIM-*eligible* (not
+and is not checked. The change itself addresses the user (and group) by the
+object id the check found, also when the tool was given a login name. PIM-*eligible* (not
 active) role holders are not detected by these lookups; list such accounts in
 `MS_PROTECTED_USERS`.
 

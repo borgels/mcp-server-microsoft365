@@ -1,7 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.6.1
 
+- Every change to an existing user addresses the object the protection guard
+  checked, by the object id the directory gave, also when the tool was given a
+  login name: profile, usage location, manager, licences, group membership,
+  password reset and Temporary Access Passes. A login name in a group's member
+  reference or in a removal by member is not accepted by Graph.
+- `remove_group_member` removes by object id, and reads a 404 as "already
+  removed" only when the group's member list shows that the user is not a
+  direct member; if the user is still in the list, or the list cannot be
+  read, the error stands. Before, a login name gave 404 and the tool reported
+  success while the user kept the membership.
+- `add_group_member` references the user's object id, not the login name.
+- `microsoft365ToolCatalog`: `remove_group_member` lists the member list read.
 - Tests: the host-mode test of a failed protection lookup turns password
   reset and Temporary Access Passes on, so it is the lookup that stops every
   tool, and it checks that the lookup was tried; the test that an ordinary
