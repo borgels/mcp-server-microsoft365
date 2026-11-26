@@ -14,6 +14,7 @@ import { pathSegment } from './path.js';
 /** Why a change was refused before anything was sent. The code is the message, and both are fixed. */
 export type RefusalCode =
   | 'not_a_draft'
+  | 'draft_already_deleted'
   | 'not_own_appointment'
   | 'sent_message_to_deleted_items'
   | 'recoverable_items'
@@ -37,6 +38,7 @@ export class RefusedError extends Error {
 /** The fixed text of each refusal: nothing of the input is repeated. */
 export const REFUSAL_TEXT: Readonly<Record<RefusalCode, string>> = {
   not_a_draft: 'Refused: the message is not a draft.',
+  draft_already_deleted: 'Refused: the draft is already in Deleted Items or the recoverable items.',
   not_own_appointment: 'Refused: only an appointment without attendees that the person organises can be deleted.',
   sent_message_to_deleted_items: 'Refused: a sent message is not moved to Deleted Items.',
   recoverable_items: 'Refused: nothing is moved into the recoverable items folders.',
@@ -302,8 +304,27 @@ export async function updateDraft(client: GraphClient, messageId: string, input:
 
 /** Deletes a draft that has not been sent (it goes to Deleted Items). Refused for a message that is not a draft. */
 export async function deleteDraft(client: GraphClient, messageId: string) {
-  await assertDraft(client, messageId);
-  await client.delete(`/me/messages/${id(messageId, 'messageId')}`);
+  const messagePath = `/me/messages/${id(messageId, 'messageId')}`;
+  // Fail closed: the draft, Deleted Items and the recoverable items folder are read just before. A draft already in one
+  // of them is not deleted again (that would delete it for good). A lookup that fails sends nothing; only a recoverable
+  // items folder Graph says does not exist (404) counts as one the draft cannot be in.
+  const folderId = async (folder: string) =>
+    (await client.get<{ id?: unknown }>(`/me/mailFolders/${folder}`, { $select: 'id' })).data?.id;
+  const [message, deletedItems, recoverable] = await Promise.all([
+    client.get<{ isDraft?: unknown; parentFolderId?: unknown }>(messagePath, { $select: 'id,isDraft,parentFolderId' }).then(r => r.data),
+    folderId('deleteditems'),
+    folderId('recoverableitemsdeletions').catch((error: unknown) => {
+      if (error instanceof GraphHttpError && error.status === 404) return null;
+      throw error;
+    }),
+  ]);
+  if (message?.isDraft !== true) throw new RefusedError('not_a_draft');
+  const parent = message.parentFolderId;
+  if (typeof parent !== 'string' || typeof deletedItems !== 'string' || (recoverable !== null && typeof recoverable !== 'string')) {
+    throw new RefusedError('draft_already_deleted');
+  }
+  if (parent === deletedItems || (recoverable !== null && parent === recoverable)) throw new RefusedError('draft_already_deleted');
+  await client.delete(messagePath);
   return { deleted: true, id: messageId };
 }
 

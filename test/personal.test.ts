@@ -277,6 +277,36 @@ describe('the fixed refusals', () => {
     expect((await received.gateway.callTool('move_message', { messageId: 'r', destination: 'deleteditems' })).isError).toBeFalsy();
   });
 
+  it('moves nothing into the recoverable items when the destination is that folder by its own id', async () => {
+    const box = delegated({ folders: { 'AAMkRecoverable': 'id-recoverable', recoverableitemsdeletions: 'id-recoverable' } });
+    expect(await box.gateway.callTool('move_message', { messageId: 'm-1', destination: 'AAMkRecoverable' })).toEqual(refusal('recoverable_items'));
+    expect(box.changes()).toHaveLength(0);
+  });
+
+  it('marks deleting a draft as write, and deleting an event as destructive', () => {
+    expect(personalCatalog.find(entry => entry.name === 'delete_draft')!.riskLevel).toBe('write');
+    expect(personalCatalog.find(entry => entry.name === 'delete_event')!.riskLevel).toBe('destructive');
+  });
+
+  it('deletes no draft already in Deleted Items or the recoverable items, and nothing when a lookup fails', async () => {
+    for (const parentFolderId of ['folder-deleteditems', 'folder-recoverableitemsdeletions']) {
+      const box = delegated({ message: { isDraft: true, parentFolderId } });
+      expect(await box.gateway.callTool('delete_draft', { messageId: 'm-1' }), parentFolderId).toEqual(refusal('draft_already_deleted'));
+      expect(box.changes(), parentFolderId).toHaveLength(0);
+    }
+    for (const name of ['deleteditems', 'recoverableitemsdeletions']) {
+      const box = delegated({ failFolder: { name, status: 503 } });
+      expect((await box.gateway.callTool('delete_draft', { messageId: 'm-1' })).isError, name).toBe(true);
+      expect(box.changes(), name).toHaveLength(0);
+    }
+    const noFolder = delegated({ message: { isDraft: true, parentFolderId: undefined } });
+    expect(await noFolder.gateway.callTool('delete_draft', { messageId: 'm-1' })).toEqual(refusal('draft_already_deleted'));
+    expect(noFolder.changes()).toHaveLength(0);
+    // A draft in Drafts is deleted.
+    const drafts = delegated({ message: { isDraft: true, parentFolderId: 'folder-drafts' } });
+    expect((await drafts.gateway.callTool('delete_draft', { messageId: 'm-1' })).isError).toBeFalsy();
+  });
+
   it('moves nothing to Deleted Items when it is not known who sent the message', async () => {
     const cases: Array<[string, Mailbox]> = [
       ['an empty profile', { profile: {}, messages: { x: { id: 'x', isDraft: false, from: { emailAddress: { address: 'kunde@example.net' } } } } }],

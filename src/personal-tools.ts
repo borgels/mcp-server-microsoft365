@@ -250,10 +250,12 @@ export const personalTools: readonly PersonalTool[] = [
     name: 'delete_draft',
     title: 'Delete a draft',
     description: 'Delete a draft that has not been sent; it goes to Deleted Items. Refused for a message that is not a draft.',
-    riskLevel: 'destructive',
+    riskLevel: 'write',
     enabledByDefault: false,
     inputSchema: object({ messageId }, ['messageId']),
-    upstream: [GET('/me/messages/{message}'), DELETE('/me/messages/{message}')],
+    // 'write', not 'destructive': it deletes only a draft that was never sent and is not in Deleted Items or the
+    // recoverable items, checked just before, and the draft goes to Deleted Items, from where it can be moved back.
+    upstream: [GET('/me/messages/{message}'), GET('/me/mailFolders/{folder}'), DELETE('/me/messages/{message}')],
     permissions: ['Mail.ReadWrite'],
   },
   // ------------------------------------------------------------------------------------------- mail organising
