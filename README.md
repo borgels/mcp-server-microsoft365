@@ -56,7 +56,7 @@ Grant the app registration only what it needs, then admin-consent:
 | Assign / remove licenses | `LicenseAssignment.ReadWrite.All` |
 | Manage group membership | `GroupMember.ReadWrite.All` |
 | Create / delete Temporary Access Pass | `UserAuthenticationMethod.ReadWrite.All` |
-| Privileged-target check (before password reset, TAP, group membership) | `RoleManagement.Read.Directory` + `GroupMember.Read.All` (or `Directory.Read.All`) |
+| Privileged-target check (before every change to an existing user) | `RoleManagement.Read.Directory` + `GroupMember.Read.All` (or `Directory.Read.All`) |
 | Read Intune devices (`list_user_devices`, `list_managed_devices`) | `DeviceManagementManagedDevices.Read.All` |
 | Read Intune configuration / compliance policies | `DeviceManagementConfiguration.Read.All` |
 | JIT PIM role activation (`activate_pim_role`, delegated) | delegated `RoleManagement.ReadWrite.Directory` (bounded by the user's eligible roles) |
@@ -178,8 +178,11 @@ called the tool, so they have their own opt-in on top of `MS_ENABLE_WRITES=true`
 | `MS_PROTECTED_USERS` | empty | Comma-separated object ids / UPNs / mail addresses that are always refused. |
 | `MS_PROTECTED_GROUPS` | empty | Comma-separated group object ids / display names / mailNicknames that are always refused. |
 
-Before `reset_password`, `create_temporary_access_pass`, `add_group_member` and
-`remove_group_member` the server checks the target and **refuses** when:
+Before every change to an existing user (`update_user`, `set_usage_location`,
+`set_manager`, `assign_license`, `remove_license`, `add_group_member`,
+`remove_group_member`, `reset_password`, `create_temporary_access_pass` and
+`delete_temporary_access_pass`) the server checks the user, and for a group
+membership the group, and **refuses** when:
 
 - the user holds a directory role (`transitiveMemberOf` contains a `directoryRole`)
   or has any entry in `/roleManagement/directory/roleAssignments` (including
@@ -190,7 +193,10 @@ Before `reset_password`, `create_temporary_access_pass`, `add_group_member` and
 
 If any of these lookups fails (missing permission, throttling, unexpected
 response) the operation is refused: the check fails closed. Privileged accounts
-are meant to be handled by a human in the Entra portal. PIM-*eligible* (not
+are meant to be handled by a human in the Entra portal. For `set_manager` the
+user whose manager changes is checked; the manager is only referenced, so an
+administrator can still be someone's manager. `create_user` makes a new account
+and is not checked. PIM-*eligible* (not
 active) role holders are not detected by these lookups; list such accounts in
 `MS_PROTECTED_USERS`.
 

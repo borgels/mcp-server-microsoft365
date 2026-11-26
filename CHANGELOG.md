@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0
+
+- The privileged-target guard runs before every change to an existing user,
+  not only before password reset, Temporary Access Passes and group
+  membership: `update_user`, `set_usage_location`, `set_manager` (the user
+  whose manager changes), `assign_license`, `remove_license` and
+  `delete_temporary_access_pass` now refuse a user who holds a directory role,
+  has a role assignment, is in a role-assignable group or is listed in
+  `MS_PROTECTED_USERS`, and refuse when that cannot be verified (the check
+  fails closed). Nothing is sent to Graph in either case. These tools now need
+  `RoleManagement.Read.Directory` as well. In host mode the refusal is the
+  fixed `Refused: the target is protected.`
+- `microsoft365ToolCatalog` lists the guard's lookups for those tools.
+- Tests run every tool that changes an existing user against an administrator,
+  a scoped role assignment, a refused lookup and a lookup that does not get
+  through.
+
 ## 0.5.1
 
 - Licensor and copyright holder corrected to Borgels Services ApS in `LICENSE`,

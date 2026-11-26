@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import { describe, expect, it } from 'vitest';
-import { createMicrosoft365Gateway } from '../src/gateway.js';
+import { createMicrosoft365Gateway, microsoft365GatewayTools, type GatewayJsonObject } from '../src/gateway.js';
 import { GraphClient } from '../src/graph/client.js';
 import { resolveSkuId } from '../src/graph/licenses.js';
 import { assertSafePathParam } from '../src/graph/path.js';
@@ -46,6 +46,12 @@ function setup(directory: Directory, policy: Partial<ProtectionPolicy> = ENABLED
       if (req.method === 'GET' && path === '/v1.0/roleManagement/directory/roleAssignments') {
         if (directory.roleAssignmentsStatus) return Response.json({ error: { message: 'Forbidden' } }, { status: directory.roleAssignmentsStatus });
         return Response.json({ value: directory.roleAssignments ?? [] });
+      }
+      if (req.method === 'GET' && path === '/v1.0/subscribedSkus') {
+        return Response.json({ value: [{ skuId: 'sku-e3', skuPartNumber: 'SPE_E3', prepaidUnits: { enabled: 5 }, consumedUnits: 1 }] });
+      }
+      if (req.method === 'GET' && path.endsWith('/authentication/temporaryAccessPassMethods')) {
+        return Response.json({ value: [{ id: 'tap-1' }] });
       }
       if (req.method === 'GET' && path.startsWith('/v1.0/groups/')) {
         return Response.json(directory.group ?? { id: 'g-1', displayName: 'Sales', isAssignableToRole: false });
@@ -162,6 +168,82 @@ describe('privileged target protection', () => {
     const { gateway, writes } = setup({});
     await gateway.callTool('add_group_member', { groupId: 'g-1', userId: 'u-1' });
     expect(writes().map(r => new URL(r.url).pathname)).toEqual(['/v1.0/groups/g-1/members/$ref']);
+  });
+});
+
+/**
+ * Every tool that changes an existing user, with an input that would otherwise succeed. create_user is the only write
+ * that is not here: it makes a new account. The guard runs before any write, so a privileged user or a lookup that
+ * cannot be completed means nothing is sent.
+ */
+const USER_CHANGES: ReadonlyArray<[string, GatewayJsonObject]> = [
+  ['update_user', { user: 'u-1', jobTitle: 'Sales' }],
+  ['update_user', { user: 'u-1', accountEnabled: false }],
+  ['set_usage_location', { user: 'u-1', usageLocation: 'DK' }],
+  ['set_manager', { user: 'u-1', manager: '11111111-2222-3333-4444-555555555555' }],
+  ['assign_license', { user: 'u-1', license: 'E3', usageLocation: 'DK' }],
+  ['remove_license', { user: 'u-1', license: 'E3' }],
+  ['add_group_member', { groupId: 'g-1', userId: 'u-1' }],
+  ['remove_group_member', { groupId: 'g-1', userId: 'u-1' }],
+  ['reset_password', { user: 'u-1' }],
+  ['create_temporary_access_pass', { user: 'u-1' }],
+  ['delete_temporary_access_pass', { user: 'u-1' }],
+  ['delete_temporary_access_pass', { user: 'u-1', methodId: 'tap-1' }],
+];
+
+describe('every change to an existing user is guarded', () => {
+  it('covers every write tool but create_user', () => {
+    const writes = microsoft365GatewayTools.filter(t => t.riskLevel !== 'read').map(t => t.name);
+    const covered = new Set(USER_CHANGES.map(([name]) => name));
+    // activate_pim_role changes no user: the delegated caller activates its own eligible role (and no host offers it).
+    expect(writes.filter(name => !covered.has(name)).sort()).toEqual(['activate_pim_role', 'create_user']);
+  });
+
+  it.each(USER_CHANGES)('%s refuses a user with a directory role and sends nothing', async (tool, input) => {
+    const { gateway, writes } = setup({ memberOf: [{ '@odata.type': '#microsoft.graph.directoryRole', id: 'r-1', displayName: 'Global Administrator' }] });
+    await expect(gateway.callTool(tool, input)).rejects.toThrow(/directory role/);
+    expect(writes()).toHaveLength(0);
+  });
+
+  it.each(USER_CHANGES)('%s refuses a user with a scoped role assignment and sends nothing', async (tool, input) => {
+    const { gateway, writes } = setup({ roleAssignments: [{ id: 'ra-1', roleDefinitionId: 'x', directoryScopeId: '/' }] });
+    await expect(gateway.callTool(tool, input)).rejects.toThrow(/role assignment/);
+    expect(writes()).toHaveLength(0);
+  });
+
+  it.each(USER_CHANGES)('%s fails closed when the role lookup is refused and sends nothing', async (tool, input) => {
+    const { gateway, writes } = setup({ roleAssignmentsStatus: 403 });
+    await expect(gateway.callTool(tool, input)).rejects.toThrow(/Failing closed/);
+    expect(writes()).toHaveLength(0);
+  });
+
+  it.each(USER_CHANGES)('%s, in host mode, answers with the fixed refusal when the lookup does not get through', async (tool, input) => {
+    const requests: Request[] = [];
+    const gateway = createMicrosoft365Gateway({
+      accessToken: 'graph-access-0123456789abcdef',
+      policy: { enableWrites: true },
+      fetchImpl: async (i, init) => {
+        const req = new Request(i, init);
+        requests.push(req);
+        if (req.method === 'GET' && new URL(req.url).pathname.endsWith('/transitiveMemberOf')) throw new TypeError('fetch failed');
+        if (req.method === 'GET' && new URL(req.url).pathname.startsWith('/v1.0/groups/')) return Response.json({ id: 'g-1', isAssignableToRole: false });
+        if (req.method === 'GET') return Response.json({ id: 'u-1', userPrincipalName: 'someone@example.com' });
+        return new Response(null, { status: 204 });
+      },
+    });
+    // Password reset and passes are off in host mode unless the host turns them on: those two are refused before the
+    // lookup, with the same text.
+    const result = await gateway.callTool(tool, input);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toBe('Refused: the target is protected.');
+    expect(requests.filter(r => r.method !== 'GET')).toHaveLength(0);
+  });
+
+  it.each(USER_CHANGES)('%s goes through for an ordinary user', async (tool, input) => {
+    const { gateway, writes } = setup({});
+    await gateway.callTool(tool, input).catch(() => undefined);
+    // The guard did not stop it: for an ordinary user the change is attempted (the stand-in answers writes with 204).
+    expect(writes().length).toBeGreaterThan(0);
   });
 });
 
